@@ -11,6 +11,7 @@ import {
   GeneratorError,
 } from '../ast/types.js';
 import { SqlGenerator } from './base.js';
+import { escapeMySQLIdentifier, escapeSqlStringLiteral } from '../utils/sql-identifier-escape.js';
 
 export class MySQLGenerator implements SqlGenerator {
   generateUp(ast: SchemaAST): string[] {
@@ -36,7 +37,9 @@ export class MySQLGenerator implements SqlGenerator {
     // MySQL doesn't have CASCADE for DROP TABLE, handle foreign keys first
     for (let i = ast.models.length - 1; i >= 0; i--) {
       const model = ast.models[i];
-      statements.push(`DROP TABLE IF EXISTS \`${model.name}\`;`);
+      // FIX BUG-022: Use safe identifier escaping for model names
+      const tableName = escapeMySQLIdentifier(model.name);
+      statements.push(`DROP TABLE IF EXISTS ${tableName};`);
     }
 
     return statements;
@@ -44,7 +47,9 @@ export class MySQLGenerator implements SqlGenerator {
 
   private generateCreateTable(model: ModelNode): string {
     const lines: string[] = [];
-    lines.push(`CREATE TABLE \`${model.name}\` (`);
+    // FIX BUG-022: Use safe identifier escaping for model names
+    const tableName = escapeMySQLIdentifier(model.name);
+    lines.push(`CREATE TABLE ${tableName} (`);
 
     const columnDefs: string[] = [];
     const constraints: string[] = [];
@@ -71,8 +76,9 @@ export class MySQLGenerator implements SqlGenerator {
   ): { columnDef: string; constraint: string | null } {
     const parts: string[] = [];
 
-    // Column name
-    parts.push(`\`${column.name}\``);
+    // FIX BUG-026: Use safe identifier escaping for column names
+    const columnName = escapeMySQLIdentifier(column.name);
+    parts.push(columnName);
 
     // Column type
     parts.push(this.mapType(column.type, column.typeArgs));
@@ -205,7 +211,8 @@ export class MySQLGenerator implements SqlGenerator {
 
       case 'Enum':
         if (args && args.length > 0) {
-          const values = args.map((v) => `'${v}'`).join(', ');
+          // FIX BUG-024: Escape enum values to prevent SQL injection
+          const values = args.map((v) => escapeSqlStringLiteral(v)).join(', ');
           return `ENUM(${values})`;
         }
         throw new GeneratorError('Enum type requires values');
@@ -234,8 +241,8 @@ export class MySQLGenerator implements SqlGenerator {
       return value;
     }
 
-    // Handle strings - wrap in quotes
-    return `'${value}'`;
+    // FIX BUG-025: Use safe string literal escaping for default values
+    return escapeSqlStringLiteral(value);
   }
 
   private parseReference(ref: string): { table: string; column: string } {
@@ -257,7 +264,12 @@ export class MySQLGenerator implements SqlGenerator {
     refColumn: string,
     onDelete?: string
   ): string {
-    let fk = `FOREIGN KEY (\`${columnName}\`) REFERENCES \`${refTable}\`(\`${refColumn}\`)`;
+    // FIX BUG-026: Use safe identifier escaping for foreign key references
+    const safeColumnName = escapeMySQLIdentifier(columnName);
+    const safeRefTable = escapeMySQLIdentifier(refTable);
+    const safeRefColumn = escapeMySQLIdentifier(refColumn);
+
+    let fk = `FOREIGN KEY (${safeColumnName}) REFERENCES ${safeRefTable}(${safeRefColumn})`;
 
     if (onDelete) {
       const action = onDelete.toUpperCase();

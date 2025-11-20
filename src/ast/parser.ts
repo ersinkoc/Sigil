@@ -250,6 +250,16 @@ export class Parser {
   }
 
   private peek(): Token {
+    // FIX BUG-012: Add bounds checking to prevent array overflow
+    if (this.current >= this.tokens.length) {
+      // Return a safe EOF token if we've gone past the end
+      return {
+        type: 'EOF',
+        value: '',
+        line: this.tokens[this.tokens.length - 1]?.line || 1,
+        column: this.tokens[this.tokens.length - 1]?.column || 1,
+      };
+    }
     return this.tokens[this.current];
   }
 

@@ -23,8 +23,30 @@ export class LedgerManager {
     try {
       await access(this.ledgerPath);
       const content = await readFile(this.ledgerPath, 'utf-8');
-      this.ledger = JSON.parse(content);
+
+      // FIX BUG-027: Add error handling for corrupted JSON
+      try {
+        this.ledger = JSON.parse(content);
+
+        // Validate ledger structure
+        if (!this.ledger.migrations || !Array.isArray(this.ledger.migrations)) {
+          throw new Error('Invalid ledger structure: missing or invalid migrations array');
+        }
+        if (typeof this.ledger.currentBatch !== 'number') {
+          throw new Error('Invalid ledger structure: missing or invalid currentBatch');
+        }
+      } catch (parseError) {
+        throw new IntegrityError(
+          `Ledger file "${this.ledgerPath}" is corrupted and cannot be parsed. ` +
+          `Error: ${(parseError as Error).message}. ` +
+          `Please restore from backup or delete the ledger file to start fresh.`
+        );
+      }
     } catch (error) {
+      // If error is already IntegrityError, re-throw it
+      if (error instanceof IntegrityError) {
+        throw error;
+      }
       // If file doesn't exist, start with empty ledger
       this.ledger = { migrations: [], currentBatch: 0 };
     }
