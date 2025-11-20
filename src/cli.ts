@@ -16,17 +16,14 @@ import { c } from './utils/colors.js';
 import {
   generateMigrationFilename,
   createMigrationTemplate,
-  formatTable,
   pluralize,
 } from './utils/formatting.js';
 
 class SigilCLI {
-  private args: string[];
   private command: string;
   private commandArgs: string[];
 
   constructor(args: string[]) {
-    this.args = args;
     this.command = args[0] || 'help';
     this.commandArgs = args.slice(1);
   }

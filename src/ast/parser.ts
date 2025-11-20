@@ -178,19 +178,16 @@ export class Parser {
           let value = this.advance().value;
 
           // Check for dot notation
-          while (!this.isAtEnd() && this.peekValue() === '.') {
-            // We need to peek for a literal '.' character in the remaining input
-            // Since we don't tokenize '.', we need to check the raw position
-            const nextPos = this.current;
-            if (nextPos < this.tokens.length - 1) {
-              const currentToken = this.tokens[this.current - 1];
-              const nextToken = this.tokens[this.current];
-
-              // Check if there's likely a dot between tokens by looking at positions
-              // For simplicity, we'll allow IDENTIFIER directly after
-              if (this.check('IDENTIFIER')) {
-                value += '.' + this.advance().value;
-              }
+          if (this.check('DOT')) {
+            this.advance(); // consume DOT
+            if (this.check('IDENTIFIER')) {
+              value += '.' + this.advance().value;
+            } else {
+              throw new ParseError(
+                'Expected identifier after dot in reference',
+                this.peek().line,
+                this.peek().column
+              );
             }
           }
 
@@ -245,10 +242,6 @@ export class Parser {
 
   private peek(): Token {
     return this.tokens[this.current];
-  }
-
-  private peekValue(): string {
-    return this.tokens[this.current]?.value ?? '';
   }
 
   private previous(): Token {

@@ -3,8 +3,7 @@
  * Queries information_schema to extract table and column definitions
  */
 
-import { DbAdapter, SigilError } from '../ast/types.js';
-import { formatDsl } from '../utils/formatting.js';
+import { DbAdapter } from '../ast/types.js';
 
 interface ColumnInfo {
   columnName: string;

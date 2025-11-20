@@ -111,6 +111,9 @@ export class Lexer {
       case ',':
         this.addToken('COMMA', char);
         return;
+      case '.':
+        this.addToken('DOT', char);
+        return;
     }
 
     // Handle identifiers, keywords, and types
@@ -129,11 +132,9 @@ export class Lexer {
   }
 
   private scanComment(): void {
-    const start = this.column - 1;
-    let value = '#';
-
+    // Skip comment characters until end of line
     while (!this.isAtEnd() && this.peek() !== '\n') {
-      value += this.advance();
+      this.advance();
     }
 
     // Comments are ignored, we don't add them to tokens
