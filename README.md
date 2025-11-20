@@ -7,6 +7,7 @@ Sigil is a revolutionary database migration tool that rejects the complexity of 
 ## Features
 
 - **Zero Runtime Dependencies**: Only uses Node.js built-ins (`fs`, `path`, `crypto`, etc.)
+- **Multi-Database Support**: PostgreSQL, MySQL/MariaDB, and SQLite generators included
 - **Custom DSL**: Write schema definitions in `.sigl` files with a clean, intuitive syntax
 - **AST-Based**: Proper compiler pipeline (Lexer → Parser → AST → CodeGen)
 - **Database Agnostic**: Core logic is pure; database interaction via adapter pattern
@@ -336,7 +337,12 @@ const adapter = {
 ```javascript
 import mysql from 'mysql2/promise';
 
-const pool = mysql.createPool({ /* config */ });
+const pool = mysql.createPool({
+  host: 'localhost',
+  user: 'root',
+  password: 'password',
+  database: 'mydb',
+});
 
 const adapter = {
   async connect() {},
@@ -363,14 +369,106 @@ const adapter = {
     }
   },
 };
+
+export default {
+  adapter,
+  generator: new MySQLGenerator(), // Use MySQLGenerator for MySQL
+  migrationsPath: './migrations',
+  ledgerPath: './.sigil_ledger.json',
+};
 ```
+
+### SQLite Example
+
+```javascript
+import Database from 'better-sqlite3';
+
+const db = new Database('./mydb.sqlite');
+
+const adapter = {
+  async connect() {
+    // Enable foreign keys
+    db.pragma('foreign_keys = ON');
+  },
+  async disconnect() {
+    db.close();
+  },
+  async query(sql) {
+    // For SELECT queries
+    if (sql.trim().toUpperCase().startsWith('SELECT')) {
+      return db.prepare(sql).all();
+    }
+    // For other queries
+    db.prepare(sql).run();
+    return [];
+  },
+  async transaction(queries) {
+    const transaction = db.transaction(() => {
+      for (const sql of queries) {
+        db.prepare(sql).run();
+      }
+    });
+    transaction();
+  },
+};
+
+export default {
+  adapter,
+  generator: new SQLiteGenerator(), // Use SQLiteGenerator for SQLite
+  migrationsPath: './migrations',
+  ledgerPath: './.sigil_ledger.json',
+};
+```
+
+## Multi-Database Support
+
+Sigil provides dedicated SQL generators for different database systems, each optimized for the target database's specific syntax and features:
+
+### Database-Specific Features
+
+| Feature | PostgreSQL | MySQL | SQLite |
+|---------|-----------|-------|--------|
+| **Auto-increment** | `SERIAL` | `INT AUTO_INCREMENT` | `INTEGER PRIMARY KEY AUTOINCREMENT` |
+| **Enums** | CHECK constraint | Native `ENUM` type | CHECK constraint |
+| **Booleans** | Native `BOOLEAN` | `BOOLEAN` (TINYINT) | `INTEGER` (0/1) |
+| **JSON** | `JSON`, `JSONB` | `JSON` | `TEXT` (stored as JSON string) |
+| **Timestamps** | `TIMESTAMP` | `TIMESTAMP` | `TEXT` (ISO8601) |
+| **Identifiers** | Double quotes `"table"` | Backticks `` `table` `` | Double quotes `"table"` |
+| **Foreign Keys** | Native support + CASCADE | Native support + CASCADE | Native support (needs PRAGMA) |
+| **Character Sets** | UTF-8 default | UTF8MB4 with collation | UTF-8 default |
+
+### Choosing the Right Generator
+
+When configuring Sigil, import and use the appropriate generator:
+
+```javascript
+// For PostgreSQL
+import { PostgresGenerator } from 'sigil';
+generator: new PostgresGenerator()
+
+// For MySQL/MariaDB
+import { MySQLGenerator } from 'sigil';
+generator: new MySQLGenerator()
+
+// For SQLite
+import { SQLiteGenerator } from 'sigil';
+generator: new SQLiteGenerator()
+```
+
+The same `.sigl` files work across all databases - Sigil automatically generates the correct SQL syntax for each platform.
 
 ## Programmatic Usage
 
 You can also use Sigil programmatically:
 
 ```typescript
-import { Parser, PostgresGenerator, MigrationRunner } from 'sigil';
+import {
+  Parser,
+  PostgresGenerator,
+  MySQLGenerator,
+  SQLiteGenerator,
+  MigrationRunner
+} from 'sigil';
 
 // Parse a .sigl file
 const ast = Parser.parse(`
@@ -380,20 +478,29 @@ const ast = Parser.parse(`
   }
 `);
 
-// Generate SQL
-const generator = new PostgresGenerator();
-const upSql = generator.generateUp(ast);
-const downSql = generator.generateDown(ast);
+// Generate SQL for different databases
+const postgresGen = new PostgresGenerator();
+const mysqlGen = new MySQLGenerator();
+const sqliteGen = new SQLiteGenerator();
 
-console.log(upSql);
+const postgresSQL = postgresGen.generateUp(ast);
+const mysqlSQL = mysqlGen.generateUp(ast);
+const sqliteSQL = sqliteGen.generateUp(ast);
+
+console.log(postgresSQL);
 // [
 //   'CREATE TABLE "User" (\n  "id" SERIAL PRIMARY KEY,\n  "email" TEXT UNIQUE\n);'
+// ]
+
+console.log(mysqlSQL);
+// [
+//   'CREATE TABLE `User` (\n  `id` INT AUTO_INCREMENT PRIMARY KEY,\n  `email` TEXT UNIQUE\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;'
 // ]
 
 // Run migrations programmatically
 const runner = new MigrationRunner({
   adapter: myAdapter,
-  generator: new PostgresGenerator(),
+  generator: new PostgresGenerator(), // or MySQLGenerator(), SQLiteGenerator()
   migrationsPath: './migrations',
 });
 
@@ -501,8 +608,8 @@ Sigil is built on these core principles:
 ## Roadmap
 
 - [x] PostgreSQL support
-- [ ] MySQL/MariaDB support
-- [ ] SQLite support
+- [x] MySQL/MariaDB support
+- [x] SQLite support
 - [ ] Column alterations (ALTER TABLE)
 - [ ] Index management
 - [ ] Enum type management

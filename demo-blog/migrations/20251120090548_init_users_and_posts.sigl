@@ -1,0 +1,36 @@
+# Migration: Initialize blog schema with users and posts
+
+# Users table - stores blog authors and readers
+model User {
+  id          Serial          @pk
+  username    VarChar(50)     @unique @notnull
+  email       VarChar(255)    @unique @notnull
+  password    VarChar(255)    @notnull
+  firstName   VarChar(100)
+  lastName    VarChar(100)
+  bio         Text
+  role        Enum('admin', 'author', 'reader') @default('reader')
+  isActive    Boolean         @default(true)
+  createdAt   Timestamp       @default(now)
+  updatedAt   Timestamp
+}
+
+# Posts table - stores blog articles
+model Post {
+  id          Serial          @pk
+  title       VarChar(255)    @notnull
+  slug        VarChar(255)    @unique @notnull
+  content     Text            @notnull
+  excerpt     VarChar(500)
+  authorId    Int             @ref(User.id) @onDelete('cascade')
+  status      Enum('draft', 'published', 'archived') @default('draft')
+  viewCount   Int             @default(0)
+  publishedAt Timestamp
+  createdAt   Timestamp       @default(now)
+  updatedAt   Timestamp
+}
+
+# Create indexes for better performance
+> CREATE INDEX idx_posts_author ON "Post"("authorId");
+> CREATE INDEX idx_posts_status ON "Post"("status");
+> CREATE INDEX idx_users_email ON "User"("email");
