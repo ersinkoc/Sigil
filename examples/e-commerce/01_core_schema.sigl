@@ -1,0 +1,155 @@
+# E-Commerce Platform - Core Schema
+# This migration sets up the foundational tables for an online store
+
+# Users and Authentication
+model User {
+  id            Serial          @pk
+  email         VarChar(255)    @unique @notnull
+  passwordHash  VarChar(255)    @notnull
+  firstName     VarChar(100)
+  lastName      VarChar(100)
+  phone         VarChar(20)
+  isActive      Boolean         @default(true)
+  isVerified    Boolean         @default(false)
+  lastLoginAt   Timestamp
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Customer Addresses
+model Address {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  type          Enum('billing', 'shipping') @notnull
+  firstName     VarChar(100)    @notnull
+  lastName      VarChar(100)    @notnull
+  street1       VarChar(255)    @notnull
+  street2       VarChar(255)
+  city          VarChar(100)    @notnull
+  state         VarChar(100)
+  postalCode    VarChar(20)     @notnull
+  country       VarChar(2)      @notnull
+  phone         VarChar(20)
+  isDefault     Boolean         @default(false)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Product Categories
+model Category {
+  id            Serial          @pk
+  parentId      Int             @ref(Category.id) @onDelete('cascade')
+  name          VarChar(100)    @unique @notnull
+  slug          VarChar(100)    @unique @notnull
+  description   Text
+  imageUrl      VarChar(500)
+  isActive      Boolean         @default(true)
+  sortOrder     Int             @default(0)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Products
+model Product {
+  id            Serial          @pk
+  categoryId    Int             @ref(Category.id) @onDelete('set null')
+  sku           VarChar(50)     @unique @notnull
+  name          VarChar(255)    @notnull
+  slug          VarChar(255)    @unique @notnull
+  description   Text
+  shortDesc     VarChar(500)
+  price         Numeric(10,2)   @notnull
+  comparePrice  Numeric(10,2)
+  cost          Numeric(10,2)
+  stock         Int             @default(0)
+  lowStockAlert Int             @default(10)
+  weight        Numeric(8,2)
+  isActive      Boolean         @default(true)
+  isFeatured    Boolean         @default(false)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Product Images
+model ProductImage {
+  id            Serial          @pk
+  productId     Int             @ref(Product.id) @onDelete('cascade')
+  url           VarChar(500)    @notnull
+  altText       VarChar(255)
+  sortOrder     Int             @default(0)
+  isPrimary     Boolean         @default(false)
+  createdAt     Timestamp       @default(now)
+}
+
+# Shopping Carts
+model Cart {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  sessionId     VarChar(100)
+  expiresAt     Timestamp
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Cart Items
+model CartItem {
+  id            Serial          @pk
+  cartId        Int             @ref(Cart.id) @onDelete('cascade')
+  productId     Int             @ref(Product.id) @onDelete('cascade')
+  quantity      Int             @notnull @default(1)
+  price         Numeric(10,2)   @notnull
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Orders
+model Order {
+  id                Serial          @pk
+  userId            Int             @ref(User.id) @onDelete('set null')
+  orderNumber       VarChar(50)     @unique @notnull
+  status            Enum('pending', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded') @default('pending')
+  subtotal          Numeric(10,2)   @notnull
+  tax               Numeric(10,2)   @default(0)
+  shipping          Numeric(10,2)   @default(0)
+  discount          Numeric(10,2)   @default(0)
+  total             Numeric(10,2)   @notnull
+  currency          VarChar(3)      @default('USD')
+  paymentMethod     VarChar(50)
+  paymentStatus     Enum('pending', 'paid', 'failed', 'refunded') @default('pending')
+  shippingMethod    VarChar(50)
+  trackingNumber    VarChar(100)
+  notes             Text
+  shippedAt         Timestamp
+  deliveredAt       Timestamp
+  cancelledAt       Timestamp
+  createdAt         Timestamp       @default(now)
+  updatedAt         Timestamp
+}
+
+# Order Items
+model OrderItem {
+  id            Serial          @pk
+  orderId       Int             @ref(Order.id) @onDelete('cascade')
+  productId     Int             @ref(Product.id) @onDelete('set null')
+  sku           VarChar(50)     @notnull
+  name          VarChar(255)    @notnull
+  quantity      Int             @notnull
+  price         Numeric(10,2)   @notnull
+  subtotal      Numeric(10,2)   @notnull
+  tax           Numeric(10,2)   @default(0)
+  total         Numeric(10,2)   @notnull
+  createdAt     Timestamp       @default(now)
+}
+
+# Create indexes for better performance
+> CREATE INDEX idx_users_email ON "User"("email");
+> CREATE INDEX idx_addresses_user ON "Address"("userId");
+> CREATE INDEX idx_products_category ON "Product"("categoryId");
+> CREATE INDEX idx_products_sku ON "Product"("sku");
+> CREATE INDEX idx_products_slug ON "Product"("slug");
+> CREATE INDEX idx_cart_items_cart ON "CartItem"("cartId");
+> CREATE INDEX idx_cart_items_product ON "CartItem"("productId");
+> CREATE INDEX idx_orders_user ON "Order"("userId");
+> CREATE INDEX idx_orders_status ON "Order"("status");
+> CREATE INDEX idx_orders_number ON "Order"("orderNumber");
+> CREATE INDEX idx_order_items_order ON "OrderItem"("orderId");

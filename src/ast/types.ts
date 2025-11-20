@@ -86,6 +86,7 @@ export interface Ledger {
  */
 export interface SigilConfig {
   adapter: DbAdapter;
+  generator?: any; // SqlGenerator from generators/base.ts
   migrationsPath?: string;
   ledgerPath?: string;
 }

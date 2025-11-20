@@ -9,7 +9,10 @@ import { writeFile, mkdir, access } from 'fs/promises';
 import { join, resolve } from 'path';
 import { pathToFileURL } from 'url';
 import { SigilConfig, SigilError } from './ast/types.js';
+import { SqlGenerator } from './generators/base.js';
 import { PostgresGenerator } from './generators/postgres.js';
+import { MySQLGenerator } from './generators/mysql.js';
+import { SQLiteGenerator } from './generators/sqlite.js';
 import { MigrationRunner } from './engine/runner.js';
 import { PostgresIntrospector } from './engine/introspector.js';
 import { c } from './utils/colors.js';
@@ -205,7 +208,7 @@ export default {
 
     const runner = new MigrationRunner({
       adapter: config.adapter!,
-      generator: new PostgresGenerator(),
+      generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
     });
@@ -240,7 +243,7 @@ export default {
 
     const runner = new MigrationRunner({
       adapter: config.adapter!,
-      generator: new PostgresGenerator(),
+      generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
     });
@@ -268,7 +271,7 @@ export default {
 
     const runner = new MigrationRunner({
       adapter: config.adapter!,
-      generator: new PostgresGenerator(),
+      generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
     });
@@ -351,12 +354,22 @@ export default {
     console.log(`  ${c.cyan('help')}              Show this help message`);
     console.log(`  ${c.cyan('version')}           Show version information`);
     console.log();
+    console.log(c.bold('Options:'));
+    console.log(`  ${c.cyan('--database, -d')} ${c.yellow('<type>')}  Database type: postgres, mysql, sqlite`);
+    console.log(`                         ${c.dim('Overrides generator from config')}`);
+    console.log();
     console.log(c.bold('Examples:'));
     console.log(`  ${c.dim('$')} sigil init`);
     console.log(`  ${c.dim('$')} sigil create add_users_table`);
     console.log(`  ${c.dim('$')} sigil up`);
-    console.log(`  ${c.dim('$')} sigil status`);
+    console.log(`  ${c.dim('$')} sigil up --database mysql`);
+    console.log(`  ${c.dim('$')} sigil status -d sqlite`);
     console.log(`  ${c.dim('$')} sigil pull public`);
+    console.log();
+    console.log(c.bold('Supported Databases:'));
+    console.log(`  ${c.green('✓')} PostgreSQL   ${c.dim('(postgres, postgresql, pg)')}`);
+    console.log(`  ${c.green('✓')} MySQL        ${c.dim('(mysql, mariadb)')}`);
+    console.log(`  ${c.green('✓')} SQLite       ${c.dim('(sqlite, sqlite3)')}`);
   }
 
   /**
@@ -398,6 +411,47 @@ export default {
         'Database adapter not configured. Please edit sigil.config.js and provide an adapter.'
       );
     }
+  }
+
+  /**
+   * Get SQL generator based on config or CLI flag
+   */
+  private getGenerator(config: SigilConfig): SqlGenerator {
+    // Check for --database flag
+    const dbFlagIndex = this.commandArgs.findIndex(arg =>
+      arg === '--database' || arg === '-d'
+    );
+
+    if (dbFlagIndex !== -1 && this.commandArgs[dbFlagIndex + 1]) {
+      const dbType = this.commandArgs[dbFlagIndex + 1].toLowerCase();
+      switch (dbType) {
+        case 'postgres':
+        case 'postgresql':
+        case 'pg':
+          return new PostgresGenerator();
+        case 'mysql':
+        case 'mariadb':
+          return new MySQLGenerator();
+        case 'sqlite':
+        case 'sqlite3':
+          return new SQLiteGenerator();
+        default:
+          throw new SigilError(
+            `Unknown database type: ${dbType}. Supported: postgres, mysql, sqlite`
+          );
+      }
+    }
+
+    // Check if config has a generator
+    if (config.generator) {
+      return config.generator;
+    }
+
+    // Default to PostgreSQL for backwards compatibility
+    console.log(
+      c.dim('No generator specified, defaulting to PostgreSQL. Use --database flag or set generator in config.')
+    );
+    return new PostgresGenerator();
   }
 }
 
