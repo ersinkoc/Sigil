@@ -11,6 +11,7 @@ import {
   GeneratorError,
 } from '../ast/types.js';
 import { SqlGenerator } from './base.js';
+import { escapePostgresIdentifier, escapeSqlStringLiteral } from '../utils/sql-identifier-escape.js';
 
 export class SQLiteGenerator implements SqlGenerator {
   generateUp(ast: SchemaAST): string[] {
@@ -41,7 +42,9 @@ export class SQLiteGenerator implements SqlGenerator {
     // Generate DROP TABLE statements in reverse order
     for (let i = ast.models.length - 1; i >= 0; i--) {
       const model = ast.models[i];
-      statements.push(`DROP TABLE IF EXISTS "${model.name}";`);
+      // FIX BUG-023: Use safe identifier escaping for model names
+      const tableName = escapePostgresIdentifier(model.name);
+      statements.push(`DROP TABLE IF EXISTS ${tableName};`);
     }
 
     return statements;
@@ -49,7 +52,9 @@ export class SQLiteGenerator implements SqlGenerator {
 
   private generateCreateTable(model: ModelNode): string {
     const lines: string[] = [];
-    lines.push(`CREATE TABLE "${model.name}" (`);
+    // FIX BUG-023: Use safe identifier escaping for model names
+    const tableName = escapePostgresIdentifier(model.name);
+    lines.push(`CREATE TABLE ${tableName} (`);
 
     const columnDefs: string[] = [];
     const constraints: string[] = [];
@@ -76,8 +81,9 @@ export class SQLiteGenerator implements SqlGenerator {
   ): { columnDef: string; constraint: string | null } {
     const parts: string[] = [];
 
-    // Column name
-    parts.push(`"${column.name}"`);
+    // FIX BUG-026: Use safe identifier escaping for column names
+    const columnName = escapePostgresIdentifier(column.name);
+    parts.push(columnName);
 
     // Column type
     const typeInfo = this.mapType(column.type, column.typeArgs);
@@ -138,8 +144,10 @@ export class SQLiteGenerator implements SqlGenerator {
 
     // Add CHECK constraint for Enum types
     if (column.type === 'Enum' && column.typeArgs && column.typeArgs.length > 0) {
-      const values = column.typeArgs.map((v) => `'${v}'`).join(', ');
-      parts.push(`CHECK ("${column.name}" IN (${values}))`);
+      // FIX BUG-024 & BUG-015: Escape enum values to prevent SQL injection
+      const values = column.typeArgs.map((v) => escapeSqlStringLiteral(v)).join(', ');
+      const safeColumnName = escapePostgresIdentifier(column.name);
+      parts.push(`CHECK (${safeColumnName} IN (${values}))`);
     }
 
     return {
@@ -213,8 +221,8 @@ export class SQLiteGenerator implements SqlGenerator {
       return value;
     }
 
-    // Handle strings - wrap in quotes
-    return `'${value}'`;
+    // FIX BUG-025: Use safe string literal escaping for default values
+    return escapeSqlStringLiteral(value);
   }
 
   private parseReference(ref: string): { table: string; column: string } {
@@ -238,7 +246,12 @@ export class SQLiteGenerator implements SqlGenerator {
     refColumn: string,
     onDelete?: string
   ): string {
-    let fk = `FOREIGN KEY ("${columnName}") REFERENCES "${refTable}"("${refColumn}")`;
+    // FIX BUG-026: Use safe identifier escaping for foreign key references
+    const safeColumnName = escapePostgresIdentifier(columnName);
+    const safeRefTable = escapePostgresIdentifier(refTable);
+    const safeRefColumn = escapePostgresIdentifier(refColumn);
+
+    let fk = `FOREIGN KEY (${safeColumnName}) REFERENCES ${safeRefTable}(${safeRefColumn})`;
 
     if (onDelete) {
       const action = onDelete.toUpperCase();
