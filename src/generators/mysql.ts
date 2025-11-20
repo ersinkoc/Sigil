@@ -13,7 +13,29 @@ import {
 import { SqlGenerator } from './base.js';
 import { escapeMySQLIdentifier, escapeSqlStringLiteral } from '../utils/sql-identifier-escape.js';
 
+/**
+ * Configuration options for MySQL generator
+ */
+export interface MySQLGeneratorOptions {
+  /** Database engine (default: InnoDB) */
+  engine?: string;
+  /** Character set (default: utf8mb4) */
+  charset?: string;
+  /** Collation (default: utf8mb4_unicode_ci) */
+  collation?: string;
+}
+
 export class MySQLGenerator implements SqlGenerator {
+  private readonly options: Required<MySQLGeneratorOptions>;
+
+  constructor(options?: MySQLGeneratorOptions) {
+    // FIX BUG-014: Make MySQL charset, collation, and engine configurable
+    this.options = {
+      engine: options?.engine ?? 'InnoDB',
+      charset: options?.charset ?? 'utf8mb4',
+      collation: options?.collation ?? 'utf8mb4_unicode_ci',
+    };
+  }
   generateUp(ast: SchemaAST): string[] {
     const statements: string[] = [];
 
@@ -66,7 +88,10 @@ export class MySQLGenerator implements SqlGenerator {
     const allDefs = [...columnDefs, ...constraints];
     lines.push(allDefs.map((def) => `  ${def}`).join(',\n'));
 
-    lines.push(') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;');
+    // FIX BUG-014: Use configurable engine, charset, and collation
+    lines.push(
+      `) ENGINE=${this.options.engine} DEFAULT CHARSET=${this.options.charset} COLLATE=${this.options.collation};`
+    );
 
     return lines.join('\n');
   }
@@ -103,24 +128,42 @@ export class MySQLGenerator implements SqlGenerator {
           break;
 
         case 'default':
-          if (decorator.args && decorator.args.length > 0) {
-            const defaultValue = this.formatDefaultValue(decorator.args[0]);
-            parts.push(`DEFAULT ${defaultValue}`);
+          // FIX BUG-019 & BUG-028: Validate decorator arguments
+          if (!decorator.args || decorator.args.length === 0) {
+            throw new GeneratorError(
+              `@default decorator on column "${column.name}" requires a default value argument`
+            );
           }
+          if (decorator.args.length > 1) {
+            throw new GeneratorError(
+              `@default decorator on column "${column.name}" accepts only one argument, got ${decorator.args.length}`
+            );
+          }
+          const defaultValue = this.formatDefaultValue(decorator.args[0]);
+          parts.push(`DEFAULT ${defaultValue}`);
           break;
 
         case 'ref':
-          if (decorator.args && decorator.args.length > 0) {
-            const ref = this.parseReference(decorator.args[0]);
-            const onDelete = this.findOnDelete(column.decorators);
-            const fkConstraint = this.generateForeignKey(
-              column.name,
-              ref.table,
-              ref.column,
-              onDelete
+          // FIX BUG-019 & BUG-028: Validate decorator arguments
+          if (!decorator.args || decorator.args.length === 0) {
+            throw new GeneratorError(
+              `@ref decorator on column "${column.name}" requires a reference argument (e.g., @ref(Table.column))`
             );
-            constraint = fkConstraint;
           }
+          if (decorator.args.length > 1) {
+            throw new GeneratorError(
+              `@ref decorator on column "${column.name}" accepts only one argument, got ${decorator.args.length}`
+            );
+          }
+          const ref = this.parseReference(decorator.args[0]);
+          const onDelete = this.findOnDelete(column.decorators);
+          const fkConstraint = this.generateForeignKey(
+            column.name,
+            ref.table,
+            ref.column,
+            onDelete
+          );
+          constraint = fkConstraint;
           break;
 
         // onDelete is handled with @ref
@@ -255,7 +298,28 @@ export class MySQLGenerator implements SqlGenerator {
 
   private findOnDelete(decorators: DecoratorNode[]): string | undefined {
     const onDeleteDecorator = decorators.find((d) => d.name === 'onDelete');
-    return onDeleteDecorator?.args?.[0];
+    if (!onDeleteDecorator) {
+      return undefined;
+    }
+
+    // FIX BUG-019 & BUG-028: Validate onDelete decorator arguments
+    if (!onDeleteDecorator.args || onDeleteDecorator.args.length === 0) {
+      throw new GeneratorError(
+        '@onDelete decorator requires an action argument (CASCADE, SET NULL, SET DEFAULT, RESTRICT, NO ACTION)'
+      );
+    }
+
+    const action = onDeleteDecorator.args[0].toUpperCase();
+    const validActions = ['CASCADE', 'SET NULL', 'SET DEFAULT', 'RESTRICT', 'NO ACTION'];
+
+    if (!validActions.includes(action)) {
+      throw new GeneratorError(
+        `@onDelete action "${onDeleteDecorator.args[0]}" is invalid. ` +
+        `Must be one of: ${validActions.join(', ')}`
+      );
+    }
+
+    return onDeleteDecorator.args[0];
   }
 
   private generateForeignKey(
