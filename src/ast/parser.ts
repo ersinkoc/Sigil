@@ -82,6 +82,15 @@ export class Parser {
 
     this.consume('RBRACE', 'Expected "}" to close model block');
 
+    // FIX BUG-017: Validate that models have at least one column
+    if (columns.length === 0) {
+      throw new ParseError(
+        `Model "${name}" must have at least one column`,
+        nameToken.line,
+        nameToken.column
+      );
+    }
+
     return { name, columns };
   }
 

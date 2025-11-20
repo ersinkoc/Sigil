@@ -93,6 +93,8 @@ export class MigrationRunner {
     await this.adapter.connect();
 
     const applied: string[] = [];
+    // FIX BUG-004: Collect all migrations to record, only save to ledger after all succeed
+    const migrationsToRecord: { filename: string; content: string }[] = [];
 
     try {
       for (const filename of pendingFiles) {
@@ -108,10 +110,18 @@ export class MigrationRunner {
         // Execute in transaction
         await this.adapter.transaction(sqlStatements);
 
-        // Record in ledger
-        await this.ledger.recordMigration(migration.filename, migration.content);
+        // Collect migration for batch recording (don't record yet)
+        migrationsToRecord.push({
+          filename: migration.filename,
+          content: migration.content,
+        });
 
         applied.push(filename);
+      }
+
+      // FIX BUG-004: Record all migrations in the batch atomically after all succeeded
+      if (migrationsToRecord.length > 0) {
+        await this.ledger.recordBatch(migrationsToRecord);
       }
     } finally {
       await this.adapter.disconnect();

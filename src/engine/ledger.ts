@@ -113,6 +113,35 @@ export class LedgerManager {
   }
 
   /**
+   * FIX BUG-004 & BUG-005: Record multiple migrations atomically as a single batch
+   * This ensures all migrations in a batch are recorded together and batch number is atomic
+   */
+  async recordBatch(migrations: { filename: string; content: string }[]): Promise<void> {
+    if (migrations.length === 0) {
+      return;
+    }
+
+    // FIX BUG-005: Calculate batch number once at the start to prevent race conditions
+    const batchNumber = this.ledger.currentBatch + 1;
+    const appliedAt = new Date().toISOString();
+
+    // Create all entries for this batch
+    const entries: LedgerEntry[] = migrations.map(({ filename, content }) => ({
+      filename,
+      hash: LedgerManager.computeHash(content),
+      appliedAt,
+      batch: batchNumber,
+    }));
+
+    // Add all entries and update batch number atomically
+    this.ledger.migrations.push(...entries);
+    this.ledger.currentBatch = batchNumber;
+
+    // Save once for entire batch
+    await this.save();
+  }
+
+  /**
    * Remove migrations from the last batch
    */
   async rollbackLastBatch(): Promise<void> {
