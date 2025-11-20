@@ -147,7 +147,8 @@ export class PostgresGenerator implements SqlGenerator {
         if (args && args.length > 0) {
           return `VARCHAR(${args[0]})`;
         }
-        return 'VARCHAR';
+        // FIX BUG-007: Default to VARCHAR(255) instead of bare VARCHAR for valid SQL
+        return 'VARCHAR(255)';
 
       case 'Char':
         if (args && args.length > 0) {
@@ -214,8 +215,9 @@ export class PostgresGenerator implements SqlGenerator {
       return 'CURRENT_TIMESTAMP';
     }
 
+    // FIX BUG-006: Use lowercase 'true'/'false' for PostgreSQL boolean defaults
     if (value.toLowerCase() === 'true' || value.toLowerCase() === 'false') {
-      return value.toUpperCase();
+      return value.toLowerCase();
     }
 
     // Handle numbers

@@ -183,6 +183,13 @@ export default {
       throw new SigilError('Migration name is required. Usage: sigil create <name>');
     }
 
+    // FIX BUG-010: Validate migration name to prevent path traversal attacks
+    if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+      throw new SigilError(
+        'Invalid migration name. Migration names cannot contain path separators or ".."'
+      );
+    }
+
     const config = await this.loadConfig();
     const migrationsPath = resolve(process.cwd(), config.migrationsPath || './migrations');
 
