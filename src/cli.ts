@@ -15,6 +15,8 @@ import { MySQLGenerator } from './generators/mysql.js';
 import { SQLiteGenerator } from './generators/sqlite.js';
 import { MigrationRunner } from './engine/runner.js';
 import { PostgresIntrospector } from './engine/introspector.js';
+import { MySQLIntrospector } from './engine/mysql-introspector.js';
+import { SQLiteIntrospector } from './engine/sqlite-introspector.js';
 import { c } from './utils/colors.js';
 import {
   generateMigrationFilename,
@@ -314,12 +316,28 @@ export default {
     const config = await this.loadConfig();
     this.validateConfig(config);
 
-    const schema = this.commandArgs[0] || 'public';
+    // Get schema/database name (first non-flag argument)
+    const schemaArg = this.commandArgs.find(arg => !arg.startsWith('-')) || 'public';
 
-    console.log(c.bold(`Introspecting database schema: ${c.cyan(schema)}`));
+    console.log(c.bold(`Introspecting database schema: ${c.cyan(schemaArg)}`));
 
-    const introspector = new PostgresIntrospector(config.adapter!);
-    const dsl = await introspector.introspect(schema);
+    // Get the appropriate introspector based on database type
+    const generator = this.getGenerator(config);
+    let introspector: any;
+    let dsl: string;
+
+    if (generator instanceof MySQLGenerator) {
+      introspector = new MySQLIntrospector(config.adapter!);
+      dsl = await introspector.introspect(schemaArg);
+    } else if (generator instanceof SQLiteGenerator) {
+      introspector = new SQLiteIntrospector(config.adapter!);
+      dsl = await introspector.introspect();
+      console.log(c.dim('Note: SQLite introspection ignores schema parameter'));
+    } else {
+      // Default to PostgreSQL
+      introspector = new PostgresIntrospector(config.adapter!);
+      dsl = await introspector.introspect(schemaArg);
+    }
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').split('T')[0];
     const filename = `${timestamp}_introspected.sigl`;
