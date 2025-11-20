@@ -1,0 +1,138 @@
+# Multi-Tenant SaaS Platform Schema
+# This schema implements tenant isolation for a SaaS application
+
+# Tenants (Organizations)
+model Tenant {
+  id            Serial          @pk
+  name          VarChar(255)    @notnull
+  slug          VarChar(100)    @unique @notnull
+  domain        VarChar(255)    @unique
+  plan          Enum('free', 'starter', 'professional', 'enterprise') @default('free')
+  status        Enum('active', 'suspended', 'cancelled', 'trial') @default('trial')
+  maxUsers      Int             @default(5)
+  maxStorage    Int             @default(1048576)
+  settings      Json
+  trialEndsAt   Timestamp
+  suspendedAt   Timestamp
+  cancelledAt   Timestamp
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Tenant Subscriptions
+model Subscription {
+  id                Serial          @pk
+  tenantId          Int             @ref(Tenant.id) @onDelete('cascade')
+  plan              VarChar(50)     @notnull
+  status            Enum('active', 'past_due', 'cancelled', 'unpaid') @default('active')
+  currentPeriodStart Timestamp      @notnull
+  currentPeriodEnd   Timestamp      @notnull
+  cancelAtPeriodEnd  Boolean        @default(false)
+  cancelledAt       Timestamp
+  createdAt         Timestamp       @default(now)
+  updatedAt         Timestamp
+}
+
+# Users (belongs to tenants)
+model User {
+  id            Serial          @pk
+  tenantId      Int             @ref(Tenant.id) @onDelete('cascade')
+  email         VarChar(255)    @notnull
+  passwordHash  VarChar(255)    @notnull
+  firstName     VarChar(100)
+  lastName      VarChar(100)
+  role          Enum('owner', 'admin', 'member', 'guest') @default('member')
+  isActive      Boolean         @default(true)
+  lastLoginAt   Timestamp
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Tenant Invitations
+model Invitation {
+  id            Serial          @pk
+  tenantId      Int             @ref(Tenant.id) @onDelete('cascade')
+  email         VarChar(255)    @notnull
+  role          Enum('admin', 'member', 'guest') @default('member')
+  token         VarChar(255)    @unique @notnull
+  invitedBy     Int             @ref(User.id) @onDelete('set null')
+  status        Enum('pending', 'accepted', 'expired', 'revoked') @default('pending')
+  expiresAt     Timestamp       @notnull
+  acceptedAt    Timestamp
+  createdAt     Timestamp       @default(now)
+}
+
+# Projects (tenant-scoped)
+model Project {
+  id            Serial          @pk
+  tenantId      Int             @ref(Tenant.id) @onDelete('cascade')
+  name          VarChar(255)    @notnull
+  description   Text
+  status        Enum('active', 'archived', 'completed') @default('active')
+  ownerId       Int             @ref(User.id) @onDelete('set null')
+  startDate     Date
+  endDate       Date
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Tasks (tenant-scoped)
+model Task {
+  id            Serial          @pk
+  tenantId      Int             @ref(Tenant.id) @onDelete('cascade')
+  projectId     Int             @ref(Project.id) @onDelete('cascade')
+  title         VarChar(255)    @notnull
+  description   Text
+  status        Enum('todo', 'in_progress', 'review', 'done') @default('todo')
+  priority      Enum('low', 'medium', 'high', 'urgent') @default('medium')
+  assignedTo    Int             @ref(User.id) @onDelete('set null')
+  createdBy     Int             @ref(User.id) @onDelete('set null')
+  dueDate       Timestamp
+  completedAt   Timestamp
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Comments (tenant-scoped)
+model Comment {
+  id            Serial          @pk
+  tenantId      Int             @ref(Tenant.id) @onDelete('cascade')
+  taskId        Int             @ref(Task.id) @onDelete('cascade')
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  content       Text            @notnull
+  isEdited      Boolean         @default(false)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Activity Log (tenant-scoped audit trail)
+model ActivityLog {
+  id            Serial          @pk
+  tenantId      Int             @ref(Tenant.id) @onDelete('cascade')
+  userId        Int             @ref(User.id) @onDelete('set null')
+  action        VarChar(100)    @notnull
+  entityType    VarChar(50)     @notnull
+  entityId      Int             @notnull
+  metadata      Json
+  ipAddress     VarChar(45)
+  userAgent     VarChar(500)
+  createdAt     Timestamp       @default(now)
+}
+
+# Create indexes for tenant isolation and performance
+> CREATE INDEX idx_users_tenant ON "User"("tenantId");
+> CREATE INDEX idx_users_email_tenant ON "User"("tenantId", "email");
+> CREATE INDEX idx_invitations_tenant ON "Invitation"("tenantId");
+> CREATE INDEX idx_invitations_token ON "Invitation"("token");
+> CREATE INDEX idx_projects_tenant ON "Project"("tenantId");
+> CREATE INDEX idx_tasks_tenant ON "Task"("tenantId");
+> CREATE INDEX idx_tasks_project ON "Task"("projectId");
+> CREATE INDEX idx_tasks_assigned ON "Task"("assignedTo");
+> CREATE INDEX idx_comments_tenant ON "Comment"("tenantId");
+> CREATE INDEX idx_comments_task ON "Comment"("taskId");
+> CREATE INDEX idx_activity_tenant ON "ActivityLog"("tenantId");
+> CREATE INDEX idx_activity_user ON "ActivityLog"("userId");
+> CREATE INDEX idx_activity_created ON "ActivityLog"("createdAt");
+
+# Unique constraint for email within tenant
+> CREATE UNIQUE INDEX idx_users_email_tenant_unique ON "User"("tenantId", "email");

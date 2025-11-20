@@ -1,0 +1,97 @@
+# E-Commerce Platform - Reviews and Wishlist Features
+# This migration adds product reviews, ratings, and wishlist functionality
+
+# Product Reviews
+model Review {
+  id            Serial          @pk
+  productId     Int             @ref(Product.id) @onDelete('cascade')
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  orderId       Int             @ref(Order.id) @onDelete('set null')
+  rating        Int             @notnull
+  title         VarChar(200)
+  comment       Text
+  isVerified    Boolean         @default(false)
+  isApproved    Boolean         @default(false)
+  helpfulCount  Int             @default(0)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Review Images
+model ReviewImage {
+  id            Serial          @pk
+  reviewId      Int             @ref(Review.id) @onDelete('cascade')
+  url           VarChar(500)    @notnull
+  createdAt     Timestamp       @default(now)
+}
+
+# Review Helpful Votes
+model ReviewHelpful {
+  id            Serial          @pk
+  reviewId      Int             @ref(Review.id) @onDelete('cascade')
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  createdAt     Timestamp       @default(now)
+}
+
+# Wishlist
+model Wishlist {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  name          VarChar(100)    @default('My Wishlist')
+  isPublic      Boolean         @default(false)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Wishlist Items
+model WishlistItem {
+  id            Serial          @pk
+  wishlistId    Int             @ref(Wishlist.id) @onDelete('cascade')
+  productId     Int             @ref(Product.id) @onDelete('cascade')
+  priority      Int             @default(0)
+  notes         Text
+  createdAt     Timestamp       @default(now)
+}
+
+# Discount Coupons
+model Coupon {
+  id            Serial          @pk
+  code          VarChar(50)     @unique @notnull
+  description   VarChar(255)
+  type          Enum('percentage', 'fixed', 'free_shipping') @notnull
+  value         Numeric(10,2)   @notnull
+  minPurchase   Numeric(10,2)   @default(0)
+  maxDiscount   Numeric(10,2)
+  usageLimit    Int
+  usageCount    Int             @default(0)
+  perUserLimit  Int             @default(1)
+  startsAt      Timestamp
+  expiresAt     Timestamp
+  isActive      Boolean         @default(true)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Coupon Usage Tracking
+model CouponUsage {
+  id            Serial          @pk
+  couponId      Int             @ref(Coupon.id) @onDelete('cascade')
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  orderId       Int             @ref(Order.id) @onDelete('cascade')
+  discountAmount Numeric(10,2)  @notnull
+  createdAt     Timestamp       @default(now)
+}
+
+# Create indexes
+> CREATE INDEX idx_reviews_product ON "Review"("productId");
+> CREATE INDEX idx_reviews_user ON "Review"("userId");
+> CREATE INDEX idx_reviews_rating ON "Review"("rating");
+> CREATE INDEX idx_review_helpful_review ON "ReviewHelpful"("reviewId");
+> CREATE INDEX idx_wishlist_user ON "Wishlist"("userId");
+> CREATE INDEX idx_wishlist_items_wishlist ON "WishlistItem"("wishlistId");
+> CREATE INDEX idx_wishlist_items_product ON "WishlistItem"("productId");
+> CREATE INDEX idx_coupons_code ON "Coupon"("code");
+> CREATE INDEX idx_coupon_usage_coupon ON "CouponUsage"("couponId");
+> CREATE INDEX idx_coupon_usage_user ON "CouponUsage"("userId");
+> CREATE UNIQUE INDEX idx_review_helpful_unique ON "ReviewHelpful"("reviewId", "userId");
+> CREATE UNIQUE INDEX idx_wishlist_item_unique ON "WishlistItem"("wishlistId", "productId");

@@ -18,6 +18,8 @@ export { SQLiteGenerator } from './generators/sqlite.js';
 export { LedgerManager } from './engine/ledger.js';
 export { MigrationRunner } from './engine/runner.js';
 export { PostgresIntrospector } from './engine/introspector.js';
+export { MySQLIntrospector } from './engine/mysql-introspector.js';
+export { SQLiteIntrospector } from './engine/sqlite-introspector.js';
 
 // Utilities
 export { c } from './utils/colors.js';

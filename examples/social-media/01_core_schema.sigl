@@ -1,0 +1,203 @@
+# Social Media Platform - Core Schema
+# This schema implements a Twitter/Instagram-like social network
+
+# Users / Profiles
+model User {
+  id            Serial          @pk
+  username      VarChar(50)     @unique @notnull
+  email         VarChar(255)    @unique @notnull
+  passwordHash  VarChar(255)    @notnull
+  displayName   VarChar(100)
+  bio           VarChar(500)
+  avatarUrl     VarChar(500)
+  coverUrl      VarChar(500)
+  website       VarChar(255)
+  location      VarChar(100)
+  birthDate     Date
+  isVerified    Boolean         @default(false)
+  isPrivate     Boolean         @default(false)
+  isActive      Boolean         @default(true)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# User Follows / Connections
+model Follow {
+  id            Serial          @pk
+  followerId    Int             @ref(User.id) @onDelete('cascade')
+  followingId   Int             @ref(User.id) @onDelete('cascade')
+  status        Enum('pending', 'accepted', 'blocked') @default('accepted')
+  createdAt     Timestamp       @default(now)
+}
+
+# Posts / Content
+model Post {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  content       Text            @notnull
+  visibility    Enum('public', 'followers', 'private') @default('public')
+  type          Enum('text', 'image', 'video', 'link', 'poll') @default('text')
+  mediaCount    Int             @default(0)
+  linkUrl       VarChar(500)
+  linkTitle     VarChar(255)
+  linkDesc      VarChar(500)
+  repostOf      Int             @ref(Post.id) @onDelete('cascade')
+  replyTo       Int             @ref(Post.id) @onDelete('cascade')
+  isEdited      Boolean         @default(false)
+  isPinned      Boolean         @default(false)
+  likeCount     Int             @default(0)
+  repostCount   Int             @default(0)
+  replyCount    Int             @default(0)
+  viewCount     Int             @default(0)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Post Media (images, videos)
+model PostMedia {
+  id            Serial          @pk
+  postId        Int             @ref(Post.id) @onDelete('cascade')
+  type          Enum('image', 'video', 'gif') @notnull
+  url           VarChar(500)    @notnull
+  thumbnailUrl  VarChar(500)
+  width         Int
+  height        Int
+  duration      Int
+  altText       VarChar(255)
+  sortOrder     Int             @default(0)
+  createdAt     Timestamp       @default(now)
+}
+
+# Likes
+model Like {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  postId        Int             @ref(Post.id) @onDelete('cascade')
+  createdAt     Timestamp       @default(now)
+}
+
+# Bookmarks / Saved Posts
+model Bookmark {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  postId        Int             @ref(Post.id) @onDelete('cascade')
+  collectionId  Int             @ref(BookmarkCollection.id) @onDelete('set null')
+  createdAt     Timestamp       @default(now)
+}
+
+# Bookmark Collections
+model BookmarkCollection {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  name          VarChar(100)    @notnull
+  description   VarChar(500)
+  isPrivate     Boolean         @default(true)
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Hashtags
+model Hashtag {
+  id            Serial          @pk
+  tag           VarChar(100)    @unique @notnull
+  postCount     Int             @default(0)
+  trendScore    Int             @default(0)
+  firstSeenAt   Timestamp       @default(now)
+  lastUsedAt    Timestamp       @default(now)
+}
+
+# Post-Hashtag Junction
+model PostHashtag {
+  id            Serial          @pk
+  postId        Int             @ref(Post.id) @onDelete('cascade')
+  hashtagId     Int             @ref(Hashtag.id) @onDelete('cascade')
+  createdAt     Timestamp       @default(now)
+}
+
+# Mentions
+model Mention {
+  id            Serial          @pk
+  postId        Int             @ref(Post.id) @onDelete('cascade')
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  mentionedBy   Int             @ref(User.id) @onDelete('cascade')
+  isRead        Boolean         @default(false)
+  createdAt     Timestamp       @default(now)
+}
+
+# Notifications
+model Notification {
+  id            Serial          @pk
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  type          Enum('like', 'repost', 'reply', 'follow', 'mention') @notnull
+  actorId       Int             @ref(User.id) @onDelete('cascade')
+  postId        Int             @ref(Post.id) @onDelete('cascade')
+  isRead        Boolean         @default(false)
+  createdAt     Timestamp       @default(now)
+}
+
+# Direct Messages / Conversations
+model Conversation {
+  id            Serial          @pk
+  isGroup       Boolean         @default(false)
+  name          VarChar(100)
+  lastMessageAt Timestamp
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Conversation Participants
+model ConversationMember {
+  id            Serial          @pk
+  conversationId Int            @ref(Conversation.id) @onDelete('cascade')
+  userId        Int             @ref(User.id) @onDelete('cascade')
+  role          Enum('owner', 'admin', 'member') @default('member')
+  lastReadAt    Timestamp
+  joinedAt      Timestamp       @default(now)
+  leftAt        Timestamp
+}
+
+# Messages
+model Message {
+  id            Serial          @pk
+  conversationId Int            @ref(Conversation.id) @onDelete('cascade')
+  senderId      Int             @ref(User.id) @onDelete('cascade')
+  content       Text            @notnull
+  type          Enum('text', 'image', 'video', 'file') @default('text')
+  mediaUrl      VarChar(500)
+  isEdited      Boolean         @default(false)
+  deletedAt     Timestamp
+  createdAt     Timestamp       @default(now)
+  updatedAt     Timestamp
+}
+
+# Create comprehensive indexes
+> CREATE INDEX idx_users_username ON "User"("username");
+> CREATE INDEX idx_users_email ON "User"("email");
+> CREATE INDEX idx_follows_follower ON "Follow"("followerId");
+> CREATE INDEX idx_follows_following ON "Follow"("followingId");
+> CREATE INDEX idx_posts_user ON "Post"("userId");
+> CREATE INDEX idx_posts_created ON "Post"("createdAt" DESC);
+> CREATE INDEX idx_posts_reply_to ON "Post"("replyTo");
+> CREATE INDEX idx_posts_visibility ON "Post"("visibility");
+> CREATE INDEX idx_likes_user ON "Like"("userId");
+> CREATE INDEX idx_likes_post ON "Like"("postId");
+> CREATE INDEX idx_bookmarks_user ON "Bookmark"("userId");
+> CREATE INDEX idx_bookmarks_post ON "Bookmark"("postId");
+> CREATE INDEX idx_hashtags_tag ON "Hashtag"("tag");
+> CREATE INDEX idx_hashtags_trend ON "Hashtag"("trendScore" DESC);
+> CREATE INDEX idx_post_hashtags_post ON "PostHashtag"("postId");
+> CREATE INDEX idx_post_hashtags_hashtag ON "PostHashtag"("hashtagId");
+> CREATE INDEX idx_mentions_user ON "Mention"("userId");
+> CREATE INDEX idx_mentions_post ON "Mention"("postId");
+> CREATE INDEX idx_notifications_user ON "Notification"("userId");
+> CREATE INDEX idx_notifications_read ON "Notification"("userId", "isRead");
+> CREATE INDEX idx_conversation_members_conversation ON "ConversationMember"("conversationId");
+> CREATE INDEX idx_conversation_members_user ON "ConversationMember"("userId");
+> CREATE INDEX idx_messages_conversation ON "Message"("conversationId");
+> CREATE INDEX idx_messages_created ON "Message"("createdAt" DESC);
+
+# Unique constraints
+> CREATE UNIQUE INDEX idx_follows_unique ON "Follow"("followerId", "followingId");
+> CREATE UNIQUE INDEX idx_likes_unique ON "Like"("userId", "postId");
+> CREATE UNIQUE INDEX idx_bookmarks_unique ON "Bookmark"("userId", "postId");
+> CREATE UNIQUE INDEX idx_post_hashtags_unique ON "PostHashtag"("postId", "hashtagId");
