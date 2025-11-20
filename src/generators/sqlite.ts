@@ -60,7 +60,7 @@ export class SQLiteGenerator implements SqlGenerator {
     const constraints: string[] = [];
 
     for (const column of model.columns) {
-      const { columnDef, constraint } = this.generateColumn(column);
+      const { columnDef, constraint } = this.generateColumn(column, model.name);
       columnDefs.push(columnDef);
       if (constraint) {
         constraints.push(constraint);
@@ -77,7 +77,8 @@ export class SQLiteGenerator implements SqlGenerator {
   }
 
   private generateColumn(
-    column: ColumnNode
+    column: ColumnNode,
+    modelName: string
   ): { columnDef: string; constraint: string | null } {
     const parts: string[] = [];
 
@@ -86,7 +87,7 @@ export class SQLiteGenerator implements SqlGenerator {
     parts.push(columnName);
 
     // Column type
-    const typeInfo = this.mapType(column.type, column.typeArgs);
+    const typeInfo = this.mapType(column.type, column.typeArgs, column.name, modelName);
     parts.push(typeInfo.type);
 
     let constraint: string | null = null;
@@ -116,12 +117,12 @@ export class SQLiteGenerator implements SqlGenerator {
           // FIX BUG-019 & BUG-028: Validate decorator arguments
           if (!decorator.args || decorator.args.length === 0) {
             throw new GeneratorError(
-              `@default decorator on column "${column.name}" requires a default value argument`
+              `@default decorator on column "${modelName}.${column.name}" requires a default value argument`
             );
           }
           if (decorator.args.length > 1) {
             throw new GeneratorError(
-              `@default decorator on column "${column.name}" accepts only one argument, got ${decorator.args.length}`
+              `@default decorator on column "${modelName}.${column.name}" accepts only one argument, got ${decorator.args.length}`
             );
           }
           const defaultValue = this.formatDefaultValue(decorator.args[0]);
@@ -132,12 +133,12 @@ export class SQLiteGenerator implements SqlGenerator {
           // FIX BUG-019 & BUG-028: Validate decorator arguments
           if (!decorator.args || decorator.args.length === 0) {
             throw new GeneratorError(
-              `@ref decorator on column "${column.name}" requires a reference argument (e.g., @ref(Table.column))`
+              `@ref decorator on column "${modelName}.${column.name}" requires a reference argument (e.g., @ref(Table.column))`
             );
           }
           if (decorator.args.length > 1) {
             throw new GeneratorError(
-              `@ref decorator on column "${column.name}" accepts only one argument, got ${decorator.args.length}`
+              `@ref decorator on column "${modelName}.${column.name}" accepts only one argument, got ${decorator.args.length}`
             );
           }
           const ref = this.parseReference(decorator.args[0]);
@@ -156,7 +157,10 @@ export class SQLiteGenerator implements SqlGenerator {
           break;
 
         default:
-          throw new GeneratorError(`Unknown decorator: @${decorator.name}`);
+          // FIX BUG-032: Add model/column context to error messages
+          throw new GeneratorError(
+            `Unknown decorator @${decorator.name} on column "${modelName}.${column.name}"`
+          );
       }
     }
 
@@ -176,7 +180,9 @@ export class SQLiteGenerator implements SqlGenerator {
 
   private mapType(
     type: string,
-    _args?: string[] // SQLite uses dynamic typing, args not needed
+    _args?: string[], // SQLite uses dynamic typing, args not needed
+    columnName?: string,
+    modelName?: string
   ): { type: string } {
     switch (type) {
       case 'Serial':
@@ -216,7 +222,9 @@ export class SQLiteGenerator implements SqlGenerator {
         return { type: 'TEXT' };
 
       default:
-        throw new GeneratorError(`Unknown type: ${type}`);
+        // FIX BUG-032: Add model/column context to error messages
+        const typeContext = modelName && columnName ? ` for column "${modelName}.${columnName}"` : '';
+        throw new GeneratorError(`Unknown type: ${type}${typeContext}`);
     }
   }
 
