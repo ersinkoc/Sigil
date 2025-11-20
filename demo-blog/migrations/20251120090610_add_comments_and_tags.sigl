@@ -1,0 +1,37 @@
+# Migration: Add comments and tags system
+
+# Comments table - stores user comments on posts
+model Comment {
+  id          Serial          @pk
+  content     Text            @notnull
+  postId      Int             @ref(Post.id) @onDelete('cascade')
+  authorId    Int             @ref(User.id) @onDelete('cascade')
+  parentId    Int             @ref(Comment.id) @onDelete('cascade')
+  isApproved  Boolean         @default(false)
+  createdAt   Timestamp       @default(now)
+  updatedAt   Timestamp
+}
+
+# Tags table - categorization system
+model Tag {
+  id          Serial          @pk
+  name        VarChar(50)     @unique @notnull
+  slug        VarChar(50)     @unique @notnull
+  description Text
+  createdAt   Timestamp       @default(now)
+}
+
+# PostTag junction table - many-to-many relationship
+model PostTag {
+  id          Serial          @pk
+  postId      Int             @ref(Post.id) @onDelete('cascade')
+  tagId       Int             @ref(Tag.id) @onDelete('cascade')
+  createdAt   Timestamp       @default(now)
+}
+
+# Create indexes and constraints
+> CREATE INDEX idx_comments_post ON "Comment"("postId");
+> CREATE INDEX idx_comments_author ON "Comment"("authorId");
+> CREATE INDEX idx_post_tags_post ON "PostTag"("postId");
+> CREATE INDEX idx_post_tags_tag ON "PostTag"("tagId");
+> CREATE UNIQUE INDEX idx_post_tag_unique ON "PostTag"("postId", "tagId");

@@ -11,6 +11,8 @@ export { Parser } from './ast/parser.js';
 // Generators
 export { SqlGenerator } from './generators/base.js';
 export { PostgresGenerator } from './generators/postgres.js';
+export { MySQLGenerator } from './generators/mysql.js';
+export { SQLiteGenerator } from './generators/sqlite.js';
 
 // Engine
 export { LedgerManager } from './engine/ledger.js';
