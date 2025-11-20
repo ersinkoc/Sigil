@@ -4,6 +4,7 @@
  */
 
 import { DbAdapter } from '../ast/types.js';
+import { escapeSqlStringLiteral } from '../utils/sql-identifier-escape.js';
 
 interface ColumnInfo {
   columnName: string;
@@ -56,10 +57,12 @@ export class PostgresIntrospector {
    * Get list of tables in schema
    */
   private async getTables(schema: string): Promise<string[]> {
+    // FIX BUG-001: Use safe string literal escaping to prevent SQL injection
+    const safeSchema = escapeSqlStringLiteral(schema);
     const query = `
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = '${schema}'
+      WHERE table_schema = ${safeSchema}
         AND table_type = 'BASE TABLE'
       ORDER BY table_name;
     `;
@@ -92,6 +95,10 @@ export class PostgresIntrospector {
    * Get column information
    */
   private async getColumns(tableName: string, schema: string): Promise<ColumnInfo[]> {
+    // FIX BUG-001: Use safe string literal escaping to prevent SQL injection
+    const safeSchema = escapeSqlStringLiteral(schema);
+    const safeTableName = escapeSqlStringLiteral(tableName);
+
     const query = `
       SELECT
         column_name,
@@ -102,8 +109,8 @@ export class PostgresIntrospector {
         is_nullable,
         column_default
       FROM information_schema.columns
-      WHERE table_schema = '${schema}'
-        AND table_name = '${tableName}'
+      WHERE table_schema = ${safeSchema}
+        AND table_name = ${safeTableName}
       ORDER BY ordinal_position;
     `;
 
@@ -127,6 +134,10 @@ export class PostgresIntrospector {
     tableName: string,
     schema: string
   ): Promise<ConstraintInfo[]> {
+    // FIX BUG-001: Use safe string literal escaping to prevent SQL injection
+    const safeSchema = escapeSqlStringLiteral(schema);
+    const safeTableName = escapeSqlStringLiteral(tableName);
+
     const query = `
       SELECT
         tc.constraint_type,
@@ -140,8 +151,8 @@ export class PostgresIntrospector {
       LEFT JOIN information_schema.constraint_column_usage ccu
         ON tc.constraint_name = ccu.constraint_name
         AND tc.table_schema = ccu.table_schema
-      WHERE tc.table_schema = '${schema}'
-        AND tc.table_name = '${tableName}';
+      WHERE tc.table_schema = ${safeSchema}
+        AND tc.table_name = ${safeTableName};
     `;
 
     const results = await this.adapter.query(query);

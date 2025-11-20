@@ -4,6 +4,7 @@
  */
 
 import { DbAdapter } from '../ast/types.js';
+import { escapeSqlStringLiteral } from '../utils/sql-identifier-escape.js';
 
 interface ColumnInfo {
   columnName: string;
@@ -58,10 +59,12 @@ export class MySQLIntrospector {
    * Get list of tables in database
    */
   private async getTables(database: string): Promise<string[]> {
+    // FIX BUG-001: Use safe string literal escaping to prevent SQL injection
+    const safeDatabase = escapeSqlStringLiteral(database);
     const query = `
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = '${database}'
+      WHERE table_schema = ${safeDatabase}
         AND table_type = 'BASE TABLE'
       ORDER BY table_name
     `;
@@ -94,6 +97,10 @@ export class MySQLIntrospector {
    * Get column information
    */
   private async getColumns(tableName: string, database: string): Promise<ColumnInfo[]> {
+    // FIX BUG-001: Use safe string literal escaping to prevent SQL injection
+    const safeDatabase = escapeSqlStringLiteral(database);
+    const safeTableName = escapeSqlStringLiteral(tableName);
+
     const query = `
       SELECT
         column_name as columnName,
@@ -106,8 +113,8 @@ export class MySQLIntrospector {
         column_type as columnType,
         extra
       FROM information_schema.columns
-      WHERE table_schema = '${database}'
-        AND table_name = '${tableName}'
+      WHERE table_schema = ${safeDatabase}
+        AND table_name = ${safeTableName}
       ORDER BY ordinal_position
     `;
 
@@ -118,6 +125,10 @@ export class MySQLIntrospector {
    * Get constraint information
    */
   private async getConstraints(tableName: string, database: string): Promise<ConstraintInfo[]> {
+    // FIX BUG-001: Use safe string literal escaping to prevent SQL injection
+    const safeDatabase = escapeSqlStringLiteral(database);
+    const safeTableName = escapeSqlStringLiteral(tableName);
+
     const query = `
       SELECT
         tc.constraint_type as constraintType,
@@ -129,8 +140,8 @@ export class MySQLIntrospector {
         ON tc.constraint_name = kcu.constraint_name
         AND tc.table_schema = kcu.table_schema
         AND tc.table_name = kcu.table_name
-      WHERE tc.table_schema = '${database}'
-        AND tc.table_name = '${tableName}'
+      WHERE tc.table_schema = ${safeDatabase}
+        AND tc.table_name = ${safeTableName}
     `;
 
     return await this.adapter.query(query);

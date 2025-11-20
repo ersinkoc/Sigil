@@ -124,10 +124,13 @@ export class LedgerManager {
       (m) => m.batch !== this.ledger.currentBatch
     );
 
-    this.ledger.currentBatch = Math.max(
-      0,
-      ...this.ledger.migrations.map((m) => m.batch)
-    );
+    // FIX BUG-003: Handle empty migrations array explicitly
+    if (this.ledger.migrations.length === 0) {
+      this.ledger.currentBatch = 0;
+    } else {
+      const batches = this.ledger.migrations.map((m) => m.batch);
+      this.ledger.currentBatch = Math.max(...batches);
+    }
 
     await this.save();
   }

@@ -4,6 +4,7 @@
  */
 
 import { DbAdapter } from '../ast/types.js';
+import { escapeSqlIdentifier } from '../utils/sql-identifier-escape.js';
 
 interface ColumnInfo {
   cid: number;
@@ -107,7 +108,9 @@ export class SQLiteIntrospector {
    * Get column information using PRAGMA
    */
   private async getColumns(tableName: string): Promise<ColumnInfo[]> {
-    const query = `PRAGMA table_info("${tableName}")`;
+    // FIX BUG-001: Validate table name to prevent SQL injection
+    const safeTableName = escapeSqlIdentifier(tableName);
+    const query = `PRAGMA table_info("${safeTableName}")`;
     return await this.adapter.query(query);
   }
 
@@ -115,7 +118,9 @@ export class SQLiteIntrospector {
    * Get foreign key information using PRAGMA
    */
   private async getForeignKeys(tableName: string): Promise<ForeignKeyInfo[]> {
-    const query = `PRAGMA foreign_key_list("${tableName}")`;
+    // FIX BUG-001: Validate table name to prevent SQL injection
+    const safeTableName = escapeSqlIdentifier(tableName);
+    const query = `PRAGMA foreign_key_list("${safeTableName}")`;
     return await this.adapter.query(query);
   }
 
@@ -123,7 +128,9 @@ export class SQLiteIntrospector {
    * Get index information
    */
   private async getIndexes(tableName: string): Promise<Map<string, IndexInfo>> {
-    const query = `PRAGMA index_list("${tableName}")`;
+    // FIX BUG-001: Validate table name to prevent SQL injection
+    const safeTableName = escapeSqlIdentifier(tableName);
+    const query = `PRAGMA index_list("${safeTableName}")`;
     const indexes = await this.adapter.query(query);
 
     const indexMap = new Map<string, IndexInfo>();
@@ -131,7 +138,9 @@ export class SQLiteIntrospector {
     for (const idx of indexes) {
       // Skip auto-created indexes (for primary keys and foreign keys)
       if (idx.origin === 'pk' || idx.origin === 'u') {
-        const columnsQuery = `PRAGMA index_info("${idx.name}")`;
+        // FIX BUG-001: Validate index name to prevent SQL injection
+        const safeIndexName = escapeSqlIdentifier(idx.name);
+        const columnsQuery = `PRAGMA index_info("${safeIndexName}")`;
         const columns: IndexColumnInfo[] = await this.adapter.query(columnsQuery);
 
         if (columns.length === 1) {

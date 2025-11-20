@@ -73,8 +73,8 @@ export class PostgresGenerator implements SqlGenerator {
     // Column name
     parts.push(`"${column.name}"`);
 
-    // Column type
-    parts.push(this.mapType(column.type, column.typeArgs));
+    // Column type (pass column name for CHECK constraints)
+    parts.push(this.mapType(column.type, column.typeArgs, column.name));
 
     let constraint: string | null = null;
 
@@ -129,7 +129,7 @@ export class PostgresGenerator implements SqlGenerator {
     };
   }
 
-  private mapType(type: string, args?: string[]): string {
+  private mapType(type: string, args?: string[], columnName?: string): string {
     switch (type) {
       case 'Serial':
         return 'SERIAL';
@@ -197,7 +197,9 @@ export class PostgresGenerator implements SqlGenerator {
       case 'Enum':
         if (args && args.length > 0) {
           const values = args.map((v) => `'${v}'`).join(', ');
-          return `VARCHAR(50) CHECK (VALUE IN (${values}))`;
+          // FIX BUG-002: Use actual column name instead of non-existent VALUE keyword
+          const checkColumn = columnName ? `"${columnName}"` : 'value';
+          return `VARCHAR(50) CHECK (${checkColumn} IN (${values}))`;
         }
         throw new GeneratorError('Enum type requires values');
 
