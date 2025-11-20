@@ -49,7 +49,7 @@ export class PostgresGenerator implements SqlGenerator {
     const constraints: string[] = [];
 
     for (const column of model.columns) {
-      const { columnDef, constraint } = this.generateColumn(column, model.name);
+      const { columnDef, constraint } = this.generateColumn(column);
       columnDefs.push(columnDef);
       if (constraint) {
         constraints.push(constraint);
@@ -66,8 +66,7 @@ export class PostgresGenerator implements SqlGenerator {
   }
 
   private generateColumn(
-    column: ColumnNode,
-    tableName: string
+    column: ColumnNode
   ): { columnDef: string; constraint: string | null } {
     const parts: string[] = [];
 
