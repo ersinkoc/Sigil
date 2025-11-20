@@ -262,7 +262,28 @@ export class PostgresGenerator implements SqlGenerator {
     if (parts.length !== 2) {
       throw new GeneratorError(`Invalid reference format: ${ref}. Expected Table.column`);
     }
-    return { table: parts[0], column: parts[1] };
+
+    // FIX BUG-031: Validate table and column names are valid SQL identifiers
+    const table = parts[0].trim();
+    const column = parts[1].trim();
+
+    // Validate table name
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) {
+      throw new GeneratorError(
+        `Invalid table name in reference "${ref}": "${table}" is not a valid SQL identifier. ` +
+        `Table names must start with a letter or underscore and contain only letters, numbers, and underscores.`
+      );
+    }
+
+    // Validate column name
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(column)) {
+      throw new GeneratorError(
+        `Invalid column name in reference "${ref}": "${column}" is not a valid SQL identifier. ` +
+        `Column names must start with a letter or underscore and contain only letters, numbers, and underscores.`
+      );
+    }
+
+    return { table, column };
   }
 
   private findOnDelete(decorators: DecoratorNode[]): string | undefined {
