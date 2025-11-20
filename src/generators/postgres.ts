@@ -203,7 +203,9 @@ export class PostgresGenerator implements SqlGenerator {
         } else if (args && args.length === 1) {
           return `NUMERIC(${args[0]})`;
         }
-        return 'NUMERIC';
+        // FIX BUG-033: Default to NUMERIC(10, 2) for consistency with MySQL
+        // and to avoid implementation-dependent precision/scale behavior
+        return 'NUMERIC(10, 2)';
 
       case 'Real':
         return 'REAL';
