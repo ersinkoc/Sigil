@@ -1,0 +1,40 @@
+# Initial database schema
+
+# Users table
+model User {
+  id        Serial        @pk
+  email     VarChar(255)  @unique @notnull
+  username  VarChar(50)   @unique @notnull
+  password  VarChar(255)  @notnull
+  role      Enum('admin', 'user', 'guest') @default('user')
+  isActive  Boolean       @default(true)
+  createdAt Timestamp     @default(now)
+  updatedAt Timestamp     @default(now)
+}
+
+# Posts table with foreign key to users
+model Post {
+  id          Serial        @pk
+  title       VarChar(200)  @notnull
+  content     Text
+  slug        VarChar(250)  @unique
+  authorId    Int           @ref(User.id) @onDelete('cascade')
+  published   Boolean       @default(false)
+  publishedAt Timestamp
+  createdAt   Timestamp     @default(now)
+  updatedAt   Timestamp     @default(now)
+}
+
+# Comments table with foreign keys
+model Comment {
+  id        Serial        @pk
+  content   Text          @notnull
+  postId    Int           @ref(Post.id) @onDelete('cascade')
+  authorId  Int           @ref(User.id) @onDelete('cascade')
+  createdAt Timestamp     @default(now)
+}
+
+# Create indexes for better query performance
+> CREATE INDEX idx_posts_author ON "Post"("authorId");
+> CREATE INDEX idx_posts_published ON "Post"("published", "publishedAt");
+> CREATE INDEX idx_comments_post ON "Comment"("postId");

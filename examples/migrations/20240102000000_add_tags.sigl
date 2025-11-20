@@ -1,0 +1,20 @@
+# Add tags functionality
+
+# Tags table
+model Tag {
+  id        Serial        @pk
+  name      VarChar(50)   @unique @notnull
+  slug      VarChar(60)   @unique @notnull
+  createdAt Timestamp     @default(now)
+}
+
+# Post-Tag junction table (many-to-many relationship)
+model PostTag {
+  id        Serial    @pk
+  postId    Int       @ref(Post.id) @onDelete('cascade')
+  tagId     Int       @ref(Tag.id) @onDelete('cascade')
+}
+
+# Create composite unique index on junction table
+> CREATE UNIQUE INDEX idx_post_tag_unique ON "PostTag"("postId", "tagId");
+> CREATE INDEX idx_post_tag_tag ON "PostTag"("tagId");
