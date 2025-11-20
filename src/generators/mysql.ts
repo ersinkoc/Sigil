@@ -13,7 +13,29 @@ import {
 import { SqlGenerator } from './base.js';
 import { escapeMySQLIdentifier, escapeSqlStringLiteral } from '../utils/sql-identifier-escape.js';
 
+/**
+ * Configuration options for MySQL generator
+ */
+export interface MySQLGeneratorOptions {
+  /** Database engine (default: InnoDB) */
+  engine?: string;
+  /** Character set (default: utf8mb4) */
+  charset?: string;
+  /** Collation (default: utf8mb4_unicode_ci) */
+  collation?: string;
+}
+
 export class MySQLGenerator implements SqlGenerator {
+  private readonly options: Required<MySQLGeneratorOptions>;
+
+  constructor(options?: MySQLGeneratorOptions) {
+    // FIX BUG-014: Make MySQL charset, collation, and engine configurable
+    this.options = {
+      engine: options?.engine ?? 'InnoDB',
+      charset: options?.charset ?? 'utf8mb4',
+      collation: options?.collation ?? 'utf8mb4_unicode_ci',
+    };
+  }
   generateUp(ast: SchemaAST): string[] {
     const statements: string[] = [];
 
@@ -66,7 +88,10 @@ export class MySQLGenerator implements SqlGenerator {
     const allDefs = [...columnDefs, ...constraints];
     lines.push(allDefs.map((def) => `  ${def}`).join(',\n'));
 
-    lines.push(') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;');
+    // FIX BUG-014: Use configurable engine, charset, and collation
+    lines.push(
+      `) ENGINE=${this.options.engine} DEFAULT CHARSET=${this.options.charset} COLLATE=${this.options.collation};`
+    );
 
     return lines.join('\n');
   }

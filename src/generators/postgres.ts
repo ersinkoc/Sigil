@@ -178,7 +178,8 @@ export class PostgresGenerator implements SqlGenerator {
         if (args && args.length > 0) {
           return `CHAR(${args[0]})`;
         }
-        return 'CHAR';
+        // FIX BUG-030: Default to CHAR(1) for SQL standard compliance
+        return 'CHAR(1)';
 
       case 'Text':
         return 'TEXT';
