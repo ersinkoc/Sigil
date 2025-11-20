@@ -111,6 +111,9 @@ export class Lexer {
       case ',':
         this.addToken('COMMA', char);
         return;
+      case '.':
+        this.addToken('DOT', char);
+        return;
     }
 
     // Handle identifiers, keywords, and types

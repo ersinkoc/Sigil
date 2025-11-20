@@ -177,9 +177,18 @@ export class Parser {
           // Handle compound identifiers like User.id
           let value = this.advance().value;
 
-          // Check for dot notation - allow IDENTIFIER directly after
-          if (this.check('IDENTIFIER')) {
-            value += '.' + this.advance().value;
+          // Check for dot notation
+          if (this.check('DOT')) {
+            this.advance(); // consume DOT
+            if (this.check('IDENTIFIER')) {
+              value += '.' + this.advance().value;
+            } else {
+              throw new ParseError(
+                'Expected identifier after dot in reference',
+                this.peek().line,
+                this.peek().column
+              );
+            }
           }
 
           args.push(value);

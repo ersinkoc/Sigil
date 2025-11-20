@@ -13,6 +13,7 @@ export type TokenType =
   | 'LBRACE'
   | 'RBRACE'
   | 'COMMA'
+  | 'DOT'
   | 'STRING'
   | 'NUMBER'
   | 'COMMENT'
