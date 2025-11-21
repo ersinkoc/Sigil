@@ -15,6 +15,7 @@ import {
   DEFAULT_MAX_MIGRATION_FILE_SIZE,
   DEFAULT_MAX_TOTAL_MIGRATIONS_SIZE,
 } from '../utils/file-validator.js';
+import { validateConnection } from '../utils/connection-validator.js';
 
 export interface RunnerOptions {
   adapter: DbAdapter;
@@ -123,8 +124,12 @@ export class MigrationRunner {
 
     // FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
     try {
-      // Connect to database
-      await this.adapter.connect();
+      // FIX CRITICAL-6: Validate connection with retry logic and health check
+      await validateConnection(this.adapter, {
+        maxRetries: 3,
+        baseDelay: 1000
+      });
+
       for (const filename of pendingFiles) {
         const migration = migrations.find((m) => m.filename === filename);
 
@@ -187,8 +192,12 @@ export class MigrationRunner {
 
     // FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
     try {
-      // Connect to database
-      await this.adapter.connect();
+      // FIX CRITICAL-6: Validate connection with retry logic
+      await validateConnection(this.adapter, {
+        maxRetries: 3,
+        baseDelay: 1000
+      });
+
       for (const entry of lastBatch) {
         const migration = migrations.find((m) => m.filename === entry.filename);
         if (!migration) {

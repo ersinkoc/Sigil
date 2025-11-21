@@ -1,10 +1,12 @@
 /**
  * Introspector: Reverse engineers database schema into Sigil DSL
  * Queries information_schema to extract table and column definitions
+ * FIX CRITICAL-6: Added connection validation
  */
 
 import { DbAdapter } from '../ast/types.js';
 import { escapeSqlStringLiteral } from '../utils/sql-identifier-escape.js';
+import { validateConnection } from '../utils/connection-validator.js';
 
 interface ColumnInfo {
   columnName: string;
@@ -33,10 +35,12 @@ export class PostgresIntrospector {
   /**
    * Introspect the database and generate .sigl DSL
    * FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
+   * FIX CRITICAL-6: Added connection validation with retry
    */
   async introspect(schema: string = 'public'): Promise<string> {
     try {
-      await this.adapter.connect();
+      // FIX CRITICAL-6: Validate connection before introspection
+      await validateConnection(this.adapter, { maxRetries: 3 });
       // Get all tables
       const tables = await this.getTables(schema);
 
