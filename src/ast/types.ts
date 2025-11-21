@@ -92,6 +92,7 @@ export interface SchemaIntrospector {
 /**
  * Configuration
  * FIX CRITICAL-1: Added file size validation options
+ * FIX MEDIUM-1: Added logging configuration
  */
 export interface SigilConfig {
   adapter: DbAdapter;
@@ -106,6 +107,24 @@ export interface SigilConfig {
   maxTotalMigrationsSize?: number;
   /** Enable/disable file size validation (default: true) */
   enableFileSizeValidation?: boolean;
+
+  // FIX MEDIUM-1: Logging configuration (Audit trail)
+  logging?: {
+    /** Enable console output (default: true) */
+    console?: boolean;
+    /** File path for JSON logs (default: null, disabled) */
+    file?: string | null;
+    /** Minimum log level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SECURITY' (default: 'INFO') */
+    level?: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SECURITY';
+    /** Enable security audit logging (default: true) */
+    auditTrail?: boolean;
+  };
+
+  // FIX MEDIUM-3: Configurable lock timeout
+  /** Lock timeout in milliseconds (default: 30000ms / 30s) */
+  lockTimeout?: number;
+  /** Lock retry delay in milliseconds (default: 100ms) */
+  lockRetryDelay?: number;
 }
 
 /**

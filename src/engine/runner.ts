@@ -1,6 +1,7 @@
 /**
  * Runner: Orchestrates migration execution
  * Manages the flow of parsing, generating SQL, and executing migrations
+ * FIX MEDIUM-1: Added structured logging for audit trail
  */
 
 import { readdir, readFile } from 'fs/promises';
@@ -16,6 +17,7 @@ import {
   DEFAULT_MAX_TOTAL_MIGRATIONS_SIZE,
 } from '../utils/file-validator.js';
 import { validateConnection } from '../utils/connection-validator.js';
+import { getLogger } from '../utils/logger.js';
 
 export interface RunnerOptions {
   adapter: DbAdapter;
@@ -42,8 +44,15 @@ export class MigrationRunner {
     this.adapter = options.adapter;
     this.generator = options.generator;
     this.migrationsPath = options.migrationsPath;
-    this.ledger = new LedgerManager(options.ledgerPath);
     this.config = options.config; // FIX CRITICAL-1: Store config
+
+    // FIX MEDIUM-3: Pass config to ledger for configurable lock timeout
+    this.ledger = new LedgerManager(options.ledgerPath, this.config);
+
+    // FIX MEDIUM-1: Initialize logger with config
+    if (this.config?.logging) {
+      getLogger(this.config.logging);
+    }
   }
 
   /**
@@ -97,8 +106,12 @@ export class MigrationRunner {
   /**
    * Run pending migrations (UP)
    * FIX CRITICAL-4: Added ledger write validation to prevent inconsistent state
+   * FIX MEDIUM-1: Added audit logging
    */
   async up(): Promise<{ applied: string[]; skipped: string[] }> {
+    const logger = getLogger();
+    const startTime = Date.now();
+
     await this.ledger.load();
     const migrations = await this.loadMigrationFiles();
 
@@ -116,8 +129,16 @@ export class MigrationRunner {
     );
 
     if (pendingFiles.length === 0) {
+      await logger.info('migration', 'No pending migrations');
       return { applied: [], skipped: [] };
     }
+
+    // FIX MEDIUM-1: Log migration start
+    await logger.security('migration_start', {
+      pendingCount: pendingFiles.length,
+      migrations: pendingFiles,
+      migrationsPath: this.migrationsPath,
+    });
 
     // FIX CRITICAL-4: Validate ledger write capability BEFORE executing migrations
     // This prevents the scenario where migrations succeed but ledger update fails
@@ -147,6 +168,10 @@ export class MigrationRunner {
           );
         }
 
+        // FIX MEDIUM-1: Log migration application start
+        const migrationStartTime = Date.now();
+        await logger.info('migration', `Applying: ${migration.filename}`);
+
         // Parse the migration file
         const ast = Parser.parse(migration.content);
 
@@ -155,6 +180,14 @@ export class MigrationRunner {
 
         // Execute in transaction
         await this.adapter.transaction(sqlStatements);
+
+        // FIX MEDIUM-1: Log successful application
+        const migrationDuration = Date.now() - migrationStartTime;
+        await logger.security('migration_applied', {
+          filename: migration.filename,
+          duration: migrationDuration,
+          sqlStatements: sqlStatements.length,
+        });
 
         // Collect migration for batch recording (don't record yet)
         migrationsToRecord.push({
@@ -170,6 +203,12 @@ export class MigrationRunner {
         try {
           await this.ledger.recordBatch(migrationsToRecord);
         } catch (ledgerError) {
+          // FIX MEDIUM-1: Log ledger failure
+          await logger.error('ledger', 'Failed to record migrations in ledger', {
+            error: (ledgerError as Error).message,
+            appliedMigrations: migrationsToRecord.map(m => m.filename),
+          });
+
           // FIX CRITICAL-4: Enhanced error message for ledger write failures
           const errorMessage = [
             '',
@@ -200,6 +239,23 @@ export class MigrationRunner {
           throw enhancedError;
         }
       }
+
+      // FIX MEDIUM-1: Log migration completion
+      const totalDuration = Date.now() - startTime;
+      await logger.security('migration_complete', {
+        appliedCount: applied.length,
+        totalDuration,
+        batch: this.ledger.getCurrentBatch(),
+      });
+
+    } catch (error) {
+      // FIX MEDIUM-1: Log migration failure
+      await logger.error('migration', 'Migration failed', {
+        error: (error as Error).message,
+        stack: (error as Error).stack,
+        appliedSoFar: applied,
+      });
+      throw error;
     } finally {
       await this.adapter.disconnect();
     }
@@ -213,8 +269,12 @@ export class MigrationRunner {
   /**
    * Rollback last batch of migrations (DOWN)
    * FIX CRITICAL-4: Added ledger write validation to prevent inconsistent state
+   * FIX MEDIUM-1: Added audit logging
    */
   async down(): Promise<{ rolledBack: string[] }> {
+    const logger = getLogger();
+    const startTime = Date.now();
+
     await this.ledger.load();
     const migrations = await this.loadMigrationFiles();
 
@@ -222,8 +282,16 @@ export class MigrationRunner {
     const lastBatch = this.ledger.getLastBatchMigrations();
 
     if (lastBatch.length === 0) {
+      await logger.info('migration', 'No migrations to rollback');
       return { rolledBack: [] };
     }
+
+    // FIX MEDIUM-1: Log rollback start
+    await logger.security('rollback_start', {
+      batchNumber: this.ledger.getCurrentBatch(),
+      migrationCount: lastBatch.length,
+      migrations: lastBatch.map(m => m.filename),
+    });
 
     // FIX CRITICAL-4: Validate ledger write capability BEFORE executing rollbacks
     await this.ledger.validateWriteCapability();
@@ -246,6 +314,10 @@ export class MigrationRunner {
           );
         }
 
+        // FIX MEDIUM-1: Log rollback operation
+        const rollbackStartTime = Date.now();
+        await logger.info('migration', `Rolling back: ${migration.filename}`);
+
         // Parse the migration file
         const ast = Parser.parse(migration.content);
 
@@ -255,6 +327,14 @@ export class MigrationRunner {
         // Execute in transaction
         await this.adapter.transaction(sqlStatements);
 
+        // FIX MEDIUM-1: Log successful rollback
+        const rollbackDuration = Date.now() - rollbackStartTime;
+        await logger.security('migration_rolled_back', {
+          filename: migration.filename,
+          duration: rollbackDuration,
+          sqlStatements: sqlStatements.length,
+        });
+
         rolledBack.push(entry.filename);
       }
 
@@ -262,6 +342,12 @@ export class MigrationRunner {
       try {
         await this.ledger.rollbackLastBatch();
       } catch (ledgerError) {
+        // FIX MEDIUM-1: Log ledger failure
+        await logger.error('ledger', 'Failed to update ledger after rollback', {
+          error: (ledgerError as Error).message,
+          rolledBackMigrations: rolledBack,
+        });
+
         // FIX CRITICAL-4: Enhanced error message for ledger write failures during rollback
         const errorMessage = [
           '',
@@ -291,6 +377,22 @@ export class MigrationRunner {
         (enhancedError as any).rolledBackMigrations = rolledBack;
         throw enhancedError;
       }
+
+      // FIX MEDIUM-1: Log rollback completion
+      const totalDuration = Date.now() - startTime;
+      await logger.security('rollback_complete', {
+        rolledBackCount: rolledBack.length,
+        totalDuration,
+      });
+
+    } catch (error) {
+      // FIX MEDIUM-1: Log rollback failure
+      await logger.error('migration', 'Rollback failed', {
+        error: (error as Error).message,
+        stack: (error as Error).stack,
+        rolledBackSoFar: rolledBack,
+      });
+      throw error;
     } finally {
       await this.adapter.disconnect();
     }

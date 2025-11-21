@@ -9,7 +9,7 @@ import { readFile, writeFile, access, unlink, stat, rename } from 'fs/promises';
 import { open } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
 import { hostname } from 'os';
-import { Ledger, LedgerEntry, IntegrityError } from '../ast/types.js';
+import { Ledger, LedgerEntry, IntegrityError, SigilConfig } from '../ast/types.js';
 
 /**
  * FIX CRITICAL-2: Lock information structure
@@ -26,14 +26,18 @@ export class LedgerManager {
   private ledgerPath: string;
   private ledger: Ledger;
   private lockPath: string;
-  private lockTimeout: number = 30000; // 30 seconds
-  private lockRetryDelay: number = 100; // 100ms between retries
+  private lockTimeout: number; // FIX MEDIUM-3: Now configurable
+  private lockRetryDelay: number; // FIX MEDIUM-3: Now configurable
   private currentLockId: string | null = null; // FIX CRITICAL-2: Track our lock ID
 
-  constructor(ledgerPath: string = '.sigil_ledger.json') {
+  constructor(ledgerPath: string = '.sigil_ledger.json', config?: SigilConfig) {
     this.ledgerPath = ledgerPath;
     this.lockPath = `${ledgerPath}.lock`;
     this.ledger = { migrations: [], currentBatch: 0 };
+
+    // FIX MEDIUM-3: Configurable lock timeouts
+    this.lockTimeout = config?.lockTimeout ?? 30000; // Default: 30 seconds
+    this.lockRetryDelay = config?.lockRetryDelay ?? 100; // Default: 100ms
   }
 
   /**
@@ -370,6 +374,7 @@ export class LedgerManager {
   /**
    * FIX BUG-004 & BUG-005: Record multiple migrations atomically as a single batch
    * This ensures all migrations in a batch are recorded together and batch number is atomic
+   * FIX MEDIUM-6: Added batch number overflow protection
    */
   async recordBatch(migrations: { filename: string; content: string }[]): Promise<void> {
     if (migrations.length === 0) {
@@ -378,6 +383,17 @@ export class LedgerManager {
 
     // FIX BUG-005: Calculate batch number once at the start to prevent race conditions
     const batchNumber = this.ledger.currentBatch + 1;
+
+    // FIX MEDIUM-6: Check for batch number overflow
+    // JavaScript Number.MAX_SAFE_INTEGER = 2^53 - 1 = 9007199254740991
+    if (batchNumber > Number.MAX_SAFE_INTEGER) {
+      throw new IntegrityError(
+        `Batch number overflow detected! Current batch: ${this.ledger.currentBatch}. ` +
+        `Maximum safe integer exceeded. This is extremely unlikely in normal operation. ` +
+        `Consider resetting the migration ledger or using a different database.`
+      );
+    }
+
     const appliedAt = new Date().toISOString();
 
     // Create all entries for this batch
