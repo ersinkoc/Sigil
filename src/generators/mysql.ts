@@ -77,7 +77,7 @@ export class MySQLGenerator implements SqlGenerator {
     const constraints: string[] = [];
 
     for (const column of model.columns) {
-      const { columnDef, constraint } = this.generateColumn(column);
+      const { columnDef, constraint } = this.generateColumn(column, model.name);
       columnDefs.push(columnDef);
       if (constraint) {
         constraints.push(constraint);
@@ -97,7 +97,8 @@ export class MySQLGenerator implements SqlGenerator {
   }
 
   private generateColumn(
-    column: ColumnNode
+    column: ColumnNode,
+    modelName: string
   ): { columnDef: string; constraint: string | null } {
     const parts: string[] = [];
 
@@ -106,7 +107,7 @@ export class MySQLGenerator implements SqlGenerator {
     parts.push(columnName);
 
     // Column type
-    parts.push(this.mapType(column.type, column.typeArgs));
+    parts.push(this.mapType(column.type, column.typeArgs, column.name, modelName));
 
     let constraint: string | null = null;
     let isPrimaryKey = false;
@@ -131,12 +132,12 @@ export class MySQLGenerator implements SqlGenerator {
           // FIX BUG-019 & BUG-028: Validate decorator arguments
           if (!decorator.args || decorator.args.length === 0) {
             throw new GeneratorError(
-              `@default decorator on column "${column.name}" requires a default value argument`
+              `@default decorator on column "${modelName}.${column.name}" requires a default value argument`
             );
           }
           if (decorator.args.length > 1) {
             throw new GeneratorError(
-              `@default decorator on column "${column.name}" accepts only one argument, got ${decorator.args.length}`
+              `@default decorator on column "${modelName}.${column.name}" accepts only one argument, got ${decorator.args.length}`
             );
           }
           const defaultValue = this.formatDefaultValue(decorator.args[0]);
@@ -147,12 +148,12 @@ export class MySQLGenerator implements SqlGenerator {
           // FIX BUG-019 & BUG-028: Validate decorator arguments
           if (!decorator.args || decorator.args.length === 0) {
             throw new GeneratorError(
-              `@ref decorator on column "${column.name}" requires a reference argument (e.g., @ref(Table.column))`
+              `@ref decorator on column "${modelName}.${column.name}" requires a reference argument (e.g., @ref(Table.column))`
             );
           }
           if (decorator.args.length > 1) {
             throw new GeneratorError(
-              `@ref decorator on column "${column.name}" accepts only one argument, got ${decorator.args.length}`
+              `@ref decorator on column "${modelName}.${column.name}" accepts only one argument, got ${decorator.args.length}`
             );
           }
           const ref = this.parseReference(decorator.args[0]);
@@ -171,7 +172,10 @@ export class MySQLGenerator implements SqlGenerator {
           break;
 
         default:
-          throw new GeneratorError(`Unknown decorator: @${decorator.name}`);
+          // FIX BUG-032: Add model/column context to error messages
+          throw new GeneratorError(
+            `Unknown decorator @${decorator.name} on column "${modelName}.${column.name}"`
+          );
       }
     }
 
@@ -186,7 +190,7 @@ export class MySQLGenerator implements SqlGenerator {
     };
   }
 
-  private mapType(type: string, args?: string[]): string {
+  private mapType(type: string, args?: string[], columnName?: string, modelName?: string): string {
     switch (type) {
       case 'Serial':
         return 'INT AUTO_INCREMENT';
@@ -258,10 +262,14 @@ export class MySQLGenerator implements SqlGenerator {
           const values = args.map((v) => escapeSqlStringLiteral(v)).join(', ');
           return `ENUM(${values})`;
         }
-        throw new GeneratorError('Enum type requires values');
+        // FIX BUG-032: Add model/column context to error messages
+        const enumContext = modelName && columnName ? ` on column "${modelName}.${columnName}"` : '';
+        throw new GeneratorError(`Enum type requires values${enumContext}`);
 
       default:
-        throw new GeneratorError(`Unknown type: ${type}`);
+        // FIX BUG-032: Add model/column context to error messages
+        const typeContext = modelName && columnName ? ` for column "${modelName}.${columnName}"` : '';
+        throw new GeneratorError(`Unknown type: ${type}${typeContext}`);
     }
   }
 
@@ -293,7 +301,28 @@ export class MySQLGenerator implements SqlGenerator {
     if (parts.length !== 2) {
       throw new GeneratorError(`Invalid reference format: ${ref}. Expected Table.column`);
     }
-    return { table: parts[0], column: parts[1] };
+
+    // FIX BUG-031: Validate table and column names are valid SQL identifiers
+    const table = parts[0].trim();
+    const column = parts[1].trim();
+
+    // Validate table name
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) {
+      throw new GeneratorError(
+        `Invalid table name in reference "${ref}": "${table}" is not a valid SQL identifier. ` +
+        `Table names must start with a letter or underscore and contain only letters, numbers, and underscores.`
+      );
+    }
+
+    // Validate column name
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(column)) {
+      throw new GeneratorError(
+        `Invalid column name in reference "${ref}": "${column}" is not a valid SQL identifier. ` +
+        `Column names must start with a letter or underscore and contain only letters, numbers, and underscores.`
+      );
+    }
+
+    return { table, column };
   }
 
   private findOnDelete(decorators: DecoratorNode[]): string | undefined {
