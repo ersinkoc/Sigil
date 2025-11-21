@@ -89,17 +89,25 @@ export class MigrationRunner {
       return { applied: [], skipped: [] };
     }
 
-    // Connect to database
-    await this.adapter.connect();
-
     const applied: string[] = [];
     // FIX BUG-004: Collect all migrations to record, only save to ledger after all succeed
     const migrationsToRecord: { filename: string; content: string }[] = [];
 
+    // FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
     try {
+      // Connect to database
+      await this.adapter.connect();
       for (const filename of pendingFiles) {
         const migration = migrations.find((m) => m.filename === filename);
-        if (!migration) continue;
+
+        // FIX BUG-037: Throw error for missing migration files instead of silently skipping
+        if (!migration) {
+          throw new SigilError(
+            `Migration file "${filename}" is missing but expected to be applied. ` +
+            `This file may have been deleted from the migrations directory. ` +
+            `Ensure all migration files are present before running migrations.`
+          );
+        }
 
         // Parse the migration file
         const ast = Parser.parse(migration.content);
@@ -147,12 +155,12 @@ export class MigrationRunner {
       return { rolledBack: [] };
     }
 
-    // Connect to database
-    await this.adapter.connect();
-
     const rolledBack: string[] = [];
 
+    // FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
     try {
+      // Connect to database
+      await this.adapter.connect();
       for (const entry of lastBatch) {
         const migration = migrations.find((m) => m.filename === entry.filename);
         if (!migration) {

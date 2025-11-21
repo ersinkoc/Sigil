@@ -447,7 +447,14 @@ export default {
       arg === '--database' || arg === '-d'
     );
 
-    if (dbFlagIndex !== -1 && this.commandArgs[dbFlagIndex + 1]) {
+    // FIX BUG-035: Validate database flag has a value
+    if (dbFlagIndex !== -1) {
+      if (!this.commandArgs[dbFlagIndex + 1]) {
+        throw new SigilError(
+          'Database flag requires a value. Usage: --database <type>\n' +
+          'Supported types: postgres, mysql, sqlite'
+        );
+      }
       const dbType = this.commandArgs[dbFlagIndex + 1].toLowerCase();
       switch (dbType) {
         case 'postgres':

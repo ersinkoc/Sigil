@@ -46,11 +46,11 @@ export class SQLiteIntrospector {
 
   /**
    * Introspect the database and generate .sigl DSL
+   * FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
    */
   async introspect(): Promise<string> {
-    await this.adapter.connect();
-
     try {
+      await this.adapter.connect();
       // Get all tables
       const tables = await this.getTables();
 
