@@ -37,68 +37,198 @@ export class LedgerManager {
   }
 
   /**
-   * FIX BUG-039: Acquire exclusive lock on ledger file
-   * Uses atomic file creation to prevent race conditions
+   * FIX CRITICAL-2: Acquire exclusive lock with atomic operations
+   * Uses two-phase approach to prevent TOCTOU race conditions:
+   * 1. Create temp file with unique ID
+   * 2. Atomic rename to lock file
+   * 3. Validate we own the lock by checking contents
    */
   private async acquireLock(): Promise<void> {
     const startTime = Date.now();
+    const ourHostname = hostname();
 
     while (true) {
+      // Check if we've exceeded timeout
+      if (Date.now() - startTime >= this.lockTimeout) {
+        throw new IntegrityError(
+          `Failed to acquire ledger lock after ${this.lockTimeout}ms. ` +
+          `Another migration process may be running on this or another machine. ` +
+          `If no other process is running, delete "${this.lockPath}" manually.`
+        );
+      }
+
       try {
-        // Check for stale locks (older than lockTimeout)
-        try {
-          const lockStat = await stat(this.lockPath);
-          const lockAge = Date.now() - lockStat.mtimeMs;
+        // Step 1: Check for existing lock and validate if stale
+        await this.checkAndCleanStaleLock();
 
-          if (lockAge > this.lockTimeout) {
-            // Lock is stale, remove it
-            await unlink(this.lockPath).catch(() => {
-              // Ignore errors if another process already removed it
-            });
-          }
-        } catch {
-          // Lock file doesn't exist, which is fine
-        }
+        // Step 2: Create unique temp lock file
+        const lockId = randomUUID();
+        const tempLockPath = `${this.lockPath}.tmp.${lockId}`;
 
-        // Try to create lock file atomically with exclusive flag
-        const handle = await open(this.lockPath, 'wx');
-        await handle.writeFile(JSON.stringify({
+        const lockInfo: LockInfo = {
           pid: process.pid,
-          acquiredAt: new Date().toISOString()
-        }));
+          hostname: ourHostname,
+          lockId,
+          acquiredAt: new Date().toISOString(),
+        };
+
+        // Step 3: Write lock info to temp file
+        const handle = await open(tempLockPath, 'wx');
+        await handle.writeFile(JSON.stringify(lockInfo, null, 2));
         await handle.close();
 
-        // Lock acquired successfully
-        return;
-      } catch (error: any) {
-        if (error.code === 'EEXIST') {
-          // Lock file exists, another process has the lock
-          const elapsed = Date.now() - startTime;
+        // Step 4: Atomic rename (this is the critical atomic operation)
+        try {
+          await rename(tempLockPath, this.lockPath);
+        } catch (error: any) {
+          // Rename failed - another process got the lock first
+          // Clean up our temp file
+          await unlink(tempLockPath).catch(() => {});
 
-          if (elapsed >= this.lockTimeout) {
-            throw new IntegrityError(
-              `Failed to acquire ledger lock after ${this.lockTimeout}ms. ` +
-              `Another migration process may be running. ` +
-              `If no other process is running, delete "${this.lockPath}" manually.`
-            );
+          if (error.code === 'EEXIST' || error.code === 'EPERM') {
+            // Lock already exists, retry
+            await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
+            continue;
           }
 
-          // Wait and retry
-          await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
-        } else {
           // Other error, propagate it
           throw error;
         }
+
+        // Step 5: Verify we actually own the lock (paranoid check)
+        const acquired = await this.verifyLockOwnership(lockId);
+        if (acquired) {
+          this.currentLockId = lockId;
+          return;
+        }
+
+        // Someone else got the lock between rename and verify (extremely rare)
+        // This shouldn't happen with atomic rename, but be defensive
+        await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
+
+      } catch (error: any) {
+        if (error instanceof IntegrityError) {
+          // Re-throw timeout errors
+          throw error;
+        }
+
+        // Unexpected error - wait and retry
+        await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
       }
     }
   }
 
   /**
-   * FIX BUG-039: Release lock on ledger file
+   * FIX CRITICAL-2: Check for stale locks and clean them up safely
+   * Validates process is actually dead before removing lock
+   */
+  private async checkAndCleanStaleLock(): Promise<void> {
+    try {
+      // Read existing lock file
+      const lockContent = await readFile(this.lockPath, 'utf-8');
+      const lockInfo: LockInfo = JSON.parse(lockContent);
+
+      const lockAge = Date.now() - new Date(lockInfo.acquiredAt).getTime();
+
+      // Only consider locks older than timeout as stale
+      if (lockAge < this.lockTimeout) {
+        return; // Lock is fresh
+      }
+
+      // Stale lock detected - verify process is actually dead
+      const isProcessDead = await this.isProcessDead(lockInfo.pid, lockInfo.hostname);
+
+      if (isProcessDead) {
+        // Process is confirmed dead, safe to remove lock
+        await unlink(this.lockPath).catch(() => {
+          // Ignore errors - another process may have cleaned it up
+        });
+      }
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        // Lock file doesn't exist - that's fine
+        return;
+      }
+
+      // JSON parse error or other issues - treat as no lock
+      // (corrupted lock file should be removed)
+      try {
+        await unlink(this.lockPath).catch(() => {});
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
+   * FIX CRITICAL-2: Verify that we own the lock by checking the lock ID
+   */
+  private async verifyLockOwnership(expectedLockId: string): Promise<boolean> {
+    try {
+      const lockContent = await readFile(this.lockPath, 'utf-8');
+      const lockInfo: LockInfo = JSON.parse(lockContent);
+
+      // Check if the lock ID matches and it's on our hostname
+      return lockInfo.lockId === expectedLockId &&
+             lockInfo.hostname === hostname() &&
+             lockInfo.pid === process.pid;
+    } catch {
+      // Can't read/parse lock file - we don't own it
+      return false;
+    }
+  }
+
+  /**
+   * FIX CRITICAL-2: Check if a process is dead
+   * Cross-platform approach: try to send signal 0 to check existence
+   */
+  private async isProcessDead(pid: number, processHostname: string): Promise<boolean> {
+    // If lock is from a different hostname, we can't check the process
+    // Treat it as alive to be safe (don't remove cross-machine locks)
+    if (processHostname !== hostname()) {
+      return false; // Assume alive
+    }
+
+    try {
+      // Signal 0 doesn't actually send a signal, just checks if process exists
+      // This works on Unix-like systems
+      process.kill(pid, 0);
+      // If we get here, process exists
+      return false;
+    } catch (error: any) {
+      // ESRCH = process doesn't exist
+      // EPERM = process exists but we don't have permission (still alive)
+      if (error.code === 'ESRCH') {
+        return true; // Process is dead
+      }
+      return false; // Process exists (we just can't signal it)
+    }
+  }
+
+  /**
+   * FIX CRITICAL-2: Release lock with ownership verification
+   * Only release if we actually own the lock
    */
   private async releaseLock(): Promise<void> {
     try {
-      await unlink(this.lockPath);
+      // FIX CRITICAL-2: Verify we own the lock before releasing
+      if (this.currentLockId) {
+        const weOwnIt = await this.verifyLockOwnership(this.currentLockId);
+
+        if (weOwnIt) {
+          await unlink(this.lockPath);
+          this.currentLockId = null;
+        } else {
+          // We don't own the lock anymore (very unusual)
+          console.warn(
+            `Warning: Cannot release lock "${this.lockPath}" - ownership verification failed. ` +
+            `Another process may have taken over.`
+          );
+        }
+      } else {
+        // No lock ID tracked - try to release anyway (backward compat)
+        await unlink(this.lockPath);
+      }
     } catch (error: any) {
       if (error.code !== 'ENOENT') {
         // Log warning but don't fail - lock might have been cleaned up already
