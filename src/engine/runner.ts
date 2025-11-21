@@ -96,6 +96,7 @@ export class MigrationRunner {
 
   /**
    * Run pending migrations (UP)
+   * FIX CRITICAL-4: Added ledger write validation to prevent inconsistent state
    */
   async up(): Promise<{ applied: string[]; skipped: string[] }> {
     await this.ledger.load();
@@ -117,6 +118,10 @@ export class MigrationRunner {
     if (pendingFiles.length === 0) {
       return { applied: [], skipped: [] };
     }
+
+    // FIX CRITICAL-4: Validate ledger write capability BEFORE executing migrations
+    // This prevents the scenario where migrations succeed but ledger update fails
+    await this.ledger.validateWriteCapability();
 
     const applied: string[] = [];
     // FIX BUG-004: Collect all migrations to record, only save to ledger after all succeed
@@ -160,9 +165,40 @@ export class MigrationRunner {
         applied.push(filename);
       }
 
-      // FIX BUG-004: Record all migrations in the batch atomically after all succeeded
+      // FIX BUG-004 & CRITICAL-4: Record all migrations in the batch atomically after all succeeded
       if (migrationsToRecord.length > 0) {
-        await this.ledger.recordBatch(migrationsToRecord);
+        try {
+          await this.ledger.recordBatch(migrationsToRecord);
+        } catch (ledgerError) {
+          // FIX CRITICAL-4: Enhanced error message for ledger write failures
+          const errorMessage = [
+            '',
+            '🚨 CRITICAL: Migrations executed successfully but failed to update ledger!',
+            '',
+            `Error: ${(ledgerError as Error).message}`,
+            '',
+            '⚠️  DATABASE STATE:',
+            `   - ${migrationsToRecord.length} migration(s) were applied to the database`,
+            `   - Ledger file was NOT updated`,
+            '   - This creates an inconsistent state',
+            '',
+            '📋 APPLIED MIGRATIONS (not recorded):',
+            ...migrationsToRecord.map(m => `   - ${m.filename}`),
+            '',
+            '🔧 RECOVERY STEPS:',
+            '1. DO NOT run migrations again - they are already applied to the database',
+            '2. Manually update the ledger file or use a recovery tool',
+            '3. Verify database schema matches the applied migrations',
+            '4. Fix the ledger write issue (permissions, disk space, etc.)',
+            '',
+            'For assistance, check the documentation on ledger recovery.',
+          ].join('\n');
+
+          const enhancedError = new SigilError(errorMessage);
+          (enhancedError as any).cause = ledgerError;
+          (enhancedError as any).appliedMigrations = migrationsToRecord.map(m => m.filename);
+          throw enhancedError;
+        }
       }
     } finally {
       await this.adapter.disconnect();
@@ -176,6 +212,7 @@ export class MigrationRunner {
 
   /**
    * Rollback last batch of migrations (DOWN)
+   * FIX CRITICAL-4: Added ledger write validation to prevent inconsistent state
    */
   async down(): Promise<{ rolledBack: string[] }> {
     await this.ledger.load();
@@ -187,6 +224,9 @@ export class MigrationRunner {
     if (lastBatch.length === 0) {
       return { rolledBack: [] };
     }
+
+    // FIX CRITICAL-4: Validate ledger write capability BEFORE executing rollbacks
+    await this.ledger.validateWriteCapability();
 
     const rolledBack: string[] = [];
 
@@ -218,8 +258,39 @@ export class MigrationRunner {
         rolledBack.push(entry.filename);
       }
 
-      // Update ledger
-      await this.ledger.rollbackLastBatch();
+      // FIX CRITICAL-4: Update ledger with enhanced error handling
+      try {
+        await this.ledger.rollbackLastBatch();
+      } catch (ledgerError) {
+        // FIX CRITICAL-4: Enhanced error message for ledger write failures during rollback
+        const errorMessage = [
+          '',
+          '🚨 CRITICAL: Rollbacks executed successfully but failed to update ledger!',
+          '',
+          `Error: ${(ledgerError as Error).message}`,
+          '',
+          '⚠️  DATABASE STATE:',
+          `   - ${rolledBack.length} migration(s) were rolled back in the database`,
+          `   - Ledger file was NOT updated`,
+          '   - This creates an inconsistent state',
+          '',
+          '📋 ROLLED BACK MIGRATIONS (not removed from ledger):',
+          ...rolledBack.map(m => `   - ${m}`),
+          '',
+          '🔧 RECOVERY STEPS:',
+          '1. DO NOT run rollback again - migrations are already rolled back',
+          '2. Manually update the ledger file to remove these migrations',
+          '3. Verify database schema matches the current state',
+          '4. Fix the ledger write issue (permissions, disk space, etc.)',
+          '',
+          'For assistance, check the documentation on ledger recovery.',
+        ].join('\n');
+
+        const enhancedError = new SigilError(errorMessage);
+        (enhancedError as any).cause = ledgerError;
+        (enhancedError as any).rolledBackMigrations = rolledBack;
+        throw enhancedError;
+      }
     } finally {
       await this.adapter.disconnect();
     }

@@ -205,13 +205,10 @@ export default {
     // - Prevents Unicode bypasses (／, ＼)
     // - Uses canonicalization to verify final path
     // - Detects symlink attacks
-    const validatedPath = validateMigrationPath(name, migrationsPath);
+    validateMigrationPath(name, migrationsPath); // Validates name is safe
 
-    // Generate timestamped filename
+    // Generate timestamped filename (after validation)
     const filename = generateMigrationFilename(name);
-
-    // Note: validatedPath already includes full path with .sigl extension
-    // We need to use the validated path but with the timestamped filename
     const filepath = join(migrationsPath, filename);
 
     const template = createMigrationTemplate(name);
