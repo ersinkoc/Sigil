@@ -8,7 +8,7 @@
 import { writeFile, mkdir, access } from 'fs/promises';
 import { join, resolve } from 'path';
 import { pathToFileURL } from 'url';
-import { SigilConfig, SigilError } from './ast/types.js';
+import { SigilConfig, SigilError, SchemaIntrospector } from './ast/types.js';
 import { SqlGenerator } from './generators/base.js';
 import { PostgresGenerator } from './generators/postgres.js';
 import { MySQLGenerator } from './generators/mysql.js';
@@ -98,7 +98,15 @@ class SigilCLI {
       await mkdir(migrationsPath, { recursive: true });
       console.log(c.success(`Created migrations directory: ${c.dim('migrations/')}`));
     } catch (error) {
-      console.log(c.warning('Migrations directory already exists'));
+      // FIX BUG-046: Check error code before treating as EEXIST
+      const errno = error as NodeJS.ErrnoException;
+      if (errno.code === 'EEXIST') {
+        console.log(c.warning('Migrations directory already exists'));
+      } else {
+        throw new SigilError(
+          `Failed to create migrations directory: ${(error as Error).message}`
+        );
+      }
     }
 
     // Create config file
@@ -329,8 +337,9 @@ export default {
     console.log(c.bold(`Introspecting database schema: ${c.cyan(schemaArg)}`));
 
     // Get the appropriate introspector based on database type
+    // FIX BUG-044: Use proper type instead of any
     const generator = this.getGenerator(config);
-    let introspector: any;
+    let introspector: SchemaIntrospector;
     let dsl: string;
 
     if (generator instanceof MySQLGenerator) {

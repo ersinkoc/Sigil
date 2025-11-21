@@ -82,13 +82,30 @@ export interface Ledger {
 }
 
 /**
+ * FIX BUG-044: Add proper type for schema introspectors
+ * All introspectors must implement this interface
+ */
+export interface SchemaIntrospector {
+  introspect(schema?: string): Promise<string>;
+}
+
+/**
  * Configuration
  */
 export interface SigilConfig {
   adapter: DbAdapter;
-  generator?: any; // SqlGenerator from generators/base.ts
+  generator?: SqlGenerator; // FIX BUG-045: Changed from any to SqlGenerator
   migrationsPath?: string;
   ledgerPath?: string;
+}
+
+/**
+ * SQL Generator interface
+ * All generators must implement this interface
+ */
+export interface SqlGenerator {
+  generateUp(ast: SchemaAST): string[];
+  generateDown(ast: SchemaAST): string[];
 }
 
 /**
