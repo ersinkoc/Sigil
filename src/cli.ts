@@ -23,6 +23,7 @@ import {
   createMigrationTemplate,
   pluralize,
 } from './utils/formatting.js';
+import { validateMigrationPath } from './utils/path-validator.js';
 
 class SigilCLI {
   private command: string;
@@ -183,6 +184,7 @@ export default {
 
   /**
    * Create a new migration file
+   * FIX CRITICAL-5: Enhanced path traversal validation with canonicalization
    */
   private async create(): Promise<void> {
     const name = this.commandArgs[0];
@@ -191,20 +193,25 @@ export default {
       throw new SigilError('Migration name is required. Usage: sigil create <name>');
     }
 
-    // FIX BUG-010: Validate migration name to prevent path traversal attacks
-    if (name.includes('/') || name.includes('\\') || name.includes('..')) {
-      throw new SigilError(
-        'Invalid migration name. Migration names cannot contain path separators or ".."'
-      );
-    }
-
     const config = await this.loadConfig();
     const migrationsPath = resolve(process.cwd(), config.migrationsPath || './migrations');
 
     // Ensure migrations directory exists
     await mkdir(migrationsPath, { recursive: true });
 
+    // FIX CRITICAL-5: Comprehensive path validation
+    // - Prevents basic path traversal (../)
+    // - Prevents URL-encoded bypasses (%2F, %252F)
+    // - Prevents Unicode bypasses (／, ＼)
+    // - Uses canonicalization to verify final path
+    // - Detects symlink attacks
+    const validatedPath = validateMigrationPath(name, migrationsPath);
+
+    // Generate timestamped filename
     const filename = generateMigrationFilename(name);
+
+    // Note: validatedPath already includes full path with .sigl extension
+    // We need to use the validated path but with the timestamped filename
     const filepath = join(migrationsPath, filename);
 
     const template = createMigrationTemplate(name);

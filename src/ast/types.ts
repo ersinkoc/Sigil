@@ -91,12 +91,21 @@ export interface SchemaIntrospector {
 
 /**
  * Configuration
+ * FIX CRITICAL-1: Added file size validation options
  */
 export interface SigilConfig {
   adapter: DbAdapter;
   generator?: SqlGenerator; // FIX BUG-045: Changed from any to SqlGenerator
   migrationsPath?: string;
   ledgerPath?: string;
+
+  // FIX CRITICAL-1: File size validation (DoS prevention)
+  /** Maximum size for a single migration file in bytes (default: 5MB) */
+  maxMigrationFileSize?: number;
+  /** Maximum total size for all migration files in bytes (default: 50MB) */
+  maxTotalMigrationsSize?: number;
+  /** Enable/disable file size validation (default: true) */
+  enableFileSizeValidation?: boolean;
 }
 
 /**

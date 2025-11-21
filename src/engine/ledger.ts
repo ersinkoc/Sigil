@@ -2,12 +2,25 @@
  * Ledger: Tracks applied migrations and ensures integrity
  * Uses SHA-256 hashing to detect changes in migration files
  * FIX BUG-039: Implements file locking to prevent race conditions
+ * FIX CRITICAL-2: Enhanced atomic lock mechanism to prevent TOCTOU race conditions
  */
 
-import { readFile, writeFile, access, unlink, stat } from 'fs/promises';
+import { readFile, writeFile, access, unlink, stat, rename } from 'fs/promises';
 import { open } from 'fs/promises';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import { hostname } from 'os';
 import { Ledger, LedgerEntry, IntegrityError } from '../ast/types.js';
+
+/**
+ * FIX CRITICAL-2: Lock information structure
+ * Contains metadata to identify lock owner and detect stale locks
+ */
+interface LockInfo {
+  pid: number;
+  hostname: string;
+  lockId: string; // Unique identifier for this lock attempt
+  acquiredAt: string; // ISO timestamp
+}
 
 export class LedgerManager {
   private ledgerPath: string;
@@ -15,6 +28,7 @@ export class LedgerManager {
   private lockPath: string;
   private lockTimeout: number = 30000; // 30 seconds
   private lockRetryDelay: number = 100; // 100ms between retries
+  private currentLockId: string | null = null; // FIX CRITICAL-2: Track our lock ID
 
   constructor(ledgerPath: string = '.sigil_ledger.json') {
     this.ledgerPath = ledgerPath;

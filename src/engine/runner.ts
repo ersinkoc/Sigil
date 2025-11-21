@@ -5,16 +5,23 @@
 
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
-import { DbAdapter, SigilError } from '../ast/types.js';
+import { DbAdapter, SigilError, SigilConfig } from '../ast/types.js';
 import { Parser } from '../ast/parser.js';
 import { SqlGenerator } from '../generators/base.js';
 import { LedgerManager } from './ledger.js';
+import {
+  validateFileSize,
+  validateTotalSize,
+  DEFAULT_MAX_MIGRATION_FILE_SIZE,
+  DEFAULT_MAX_TOTAL_MIGRATIONS_SIZE,
+} from '../utils/file-validator.js';
 
 export interface RunnerOptions {
   adapter: DbAdapter;
   generator: SqlGenerator;
   migrationsPath: string;
   ledgerPath?: string;
+  config?: SigilConfig; // FIX CRITICAL-1: Add config for file size validation
 }
 
 export interface MigrationFile {
@@ -28,16 +35,19 @@ export class MigrationRunner {
   private generator: SqlGenerator;
   private migrationsPath: string;
   private ledger: LedgerManager;
+  private config?: SigilConfig; // FIX CRITICAL-1: Store config
 
   constructor(options: RunnerOptions) {
     this.adapter = options.adapter;
     this.generator = options.generator;
     this.migrationsPath = options.migrationsPath;
     this.ledger = new LedgerManager(options.ledgerPath);
+    this.config = options.config; // FIX CRITICAL-1: Store config
   }
 
   /**
    * Load all migration files from the migrations directory
+   * FIX CRITICAL-1: Added file size validation to prevent DoS attacks
    */
   async loadMigrationFiles(): Promise<MigrationFile[]> {
     try {
@@ -46,10 +56,28 @@ export class MigrationRunner {
         .filter((f) => f.endsWith('.sigl'))
         .sort(); // Sort to ensure chronological order
 
+      // FIX CRITICAL-1: Check if file size validation is enabled
+      const enableValidation = this.config?.enableFileSizeValidation ?? true;
+      const maxFileSize = this.config?.maxMigrationFileSize ?? DEFAULT_MAX_MIGRATION_FILE_SIZE;
+      const maxTotalSize = this.config?.maxTotalMigrationsSize ?? DEFAULT_MAX_TOTAL_MIGRATIONS_SIZE;
+
+      const filepaths = siglFiles.map(f => join(this.migrationsPath, f));
+
+      // FIX CRITICAL-1: Validate total size of all migrations
+      if (enableValidation) {
+        await validateTotalSize(filepaths, maxTotalSize);
+      }
+
       const migrations: MigrationFile[] = [];
 
       for (const filename of siglFiles) {
         const filepath = join(this.migrationsPath, filename);
+
+        // FIX CRITICAL-1: Validate individual file size before reading
+        if (enableValidation) {
+          await validateFileSize(filepath, maxFileSize);
+        }
+
         const content = await readFile(filepath, 'utf-8');
         migrations.push({ filename, filepath, content });
       }

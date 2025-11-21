@@ -38,14 +38,9 @@ export function escapeSqlIdentifier(identifier: string, type: string = 'identifi
     );
   }
 
-  // Check for SQL keywords that could be injection attempts
-  const sqlKeywords = /\b(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|EXEC|EXECUTE|UNION|SELECT|WHERE|FROM)\b/i;
-  if (sqlKeywords.test(identifier)) {
-    throw new SigilError(
-      `Invalid ${type}: "${identifier}" contains SQL keywords. ` +
-      `This may be an SQL injection attempt.`
-    );
-  }
+  // NOTE: SQL keyword detection removed as security control (CRITICAL-3 fix)
+  // Escaping provides sufficient protection against SQL injection
+  // Users can use SQL keywords as identifiers - they will be properly escaped
 
   // Validate format: must start with letter or underscore
   if (!/^[a-zA-Z_]/.test(identifier)) {
