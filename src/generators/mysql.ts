@@ -116,15 +116,33 @@ export class MySQLGenerator implements SqlGenerator {
     for (const decorator of column.decorators) {
       switch (decorator.name) {
         case 'pk':
+          // FIX BUG-041: Validate no arguments provided
+          if (decorator.args && decorator.args.length > 0) {
+            throw new GeneratorError(
+              `@pk decorator on column "${modelName}.${column.name}" does not accept arguments, but ${decorator.args.length} were provided`
+            );
+          }
           isPrimaryKey = true;
           // For MySQL, PRIMARY KEY comes after AUTO_INCREMENT
           break;
 
         case 'unique':
+          // FIX BUG-041: Validate no arguments provided
+          if (decorator.args && decorator.args.length > 0) {
+            throw new GeneratorError(
+              `@unique decorator on column "${modelName}.${column.name}" does not accept arguments, but ${decorator.args.length} were provided`
+            );
+          }
           parts.push('UNIQUE');
           break;
 
         case 'notnull':
+          // FIX BUG-041: Validate no arguments provided
+          if (decorator.args && decorator.args.length > 0) {
+            throw new GeneratorError(
+              `@notnull decorator on column "${modelName}.${column.name}" does not accept arguments, but ${decorator.args.length} were provided`
+            );
+          }
           parts.push('NOT NULL');
           break;
 
@@ -167,8 +185,17 @@ export class MySQLGenerator implements SqlGenerator {
           constraint = fkConstraint;
           break;
 
-        // onDelete is handled with @ref
+        // FIX BUG-043: Validate onDelete is used with @ref
         case 'onDelete':
+          // Check if there's a @ref decorator
+          const hasRef = column.decorators.some(d => d.name === 'ref');
+          if (!hasRef) {
+            throw new GeneratorError(
+              `@onDelete decorator on column "${modelName}.${column.name}" ` +
+              `requires a @ref decorator (e.g., @ref(Table.column) @onDelete(CASCADE))`
+            );
+          }
+          // If it has @ref, it will be handled there, so just skip here
           break;
 
         default:
@@ -306,19 +333,20 @@ export class MySQLGenerator implements SqlGenerator {
     const table = parts[0].trim();
     const column = parts[1].trim();
 
+    // FIX BUG-036: Update regex to allow hyphens, matching escapeSqlIdentifier validation
     // Validate table name
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(table)) {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_\-]*$/.test(table)) {
       throw new GeneratorError(
         `Invalid table name in reference "${ref}": "${table}" is not a valid SQL identifier. ` +
-        `Table names must start with a letter or underscore and contain only letters, numbers, and underscores.`
+        `Table names must start with a letter or underscore and contain only letters, numbers, underscores, and hyphens.`
       );
     }
 
     // Validate column name
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(column)) {
+    if (!/^[a-zA-Z_][a-zA-Z0-9_\-]*$/.test(column)) {
       throw new GeneratorError(
         `Invalid column name in reference "${ref}": "${column}" is not a valid SQL identifier. ` +
-        `Column names must start with a letter or underscore and contain only letters, numbers, and underscores.`
+        `Column names must start with a letter or underscore and contain only letters, numbers, underscores, and hyphens.`
       );
     }
 

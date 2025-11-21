@@ -1,25 +1,105 @@
 /**
  * Ledger: Tracks applied migrations and ensures integrity
  * Uses SHA-256 hashing to detect changes in migration files
+ * FIX BUG-039: Implements file locking to prevent race conditions
  */
 
-import { readFile, writeFile, access } from 'fs/promises';
+import { readFile, writeFile, access, unlink, stat } from 'fs/promises';
+import { open } from 'fs/promises';
 import { createHash } from 'crypto';
 import { Ledger, LedgerEntry, IntegrityError } from '../ast/types.js';
 
 export class LedgerManager {
   private ledgerPath: string;
   private ledger: Ledger;
+  private lockPath: string;
+  private lockTimeout: number = 30000; // 30 seconds
+  private lockRetryDelay: number = 100; // 100ms between retries
 
   constructor(ledgerPath: string = '.sigil_ledger.json') {
     this.ledgerPath = ledgerPath;
+    this.lockPath = `${ledgerPath}.lock`;
     this.ledger = { migrations: [], currentBatch: 0 };
   }
 
   /**
+   * FIX BUG-039: Acquire exclusive lock on ledger file
+   * Uses atomic file creation to prevent race conditions
+   */
+  private async acquireLock(): Promise<void> {
+    const startTime = Date.now();
+
+    while (true) {
+      try {
+        // Check for stale locks (older than lockTimeout)
+        try {
+          const lockStat = await stat(this.lockPath);
+          const lockAge = Date.now() - lockStat.mtimeMs;
+
+          if (lockAge > this.lockTimeout) {
+            // Lock is stale, remove it
+            await unlink(this.lockPath).catch(() => {
+              // Ignore errors if another process already removed it
+            });
+          }
+        } catch {
+          // Lock file doesn't exist, which is fine
+        }
+
+        // Try to create lock file atomically with exclusive flag
+        const handle = await open(this.lockPath, 'wx');
+        await handle.writeFile(JSON.stringify({
+          pid: process.pid,
+          acquiredAt: new Date().toISOString()
+        }));
+        await handle.close();
+
+        // Lock acquired successfully
+        return;
+      } catch (error: any) {
+        if (error.code === 'EEXIST') {
+          // Lock file exists, another process has the lock
+          const elapsed = Date.now() - startTime;
+
+          if (elapsed >= this.lockTimeout) {
+            throw new IntegrityError(
+              `Failed to acquire ledger lock after ${this.lockTimeout}ms. ` +
+              `Another migration process may be running. ` +
+              `If no other process is running, delete "${this.lockPath}" manually.`
+            );
+          }
+
+          // Wait and retry
+          await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
+        } else {
+          // Other error, propagate it
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
+   * FIX BUG-039: Release lock on ledger file
+   */
+  private async releaseLock(): Promise<void> {
+    try {
+      await unlink(this.lockPath);
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
+        // Log warning but don't fail - lock might have been cleaned up already
+        console.warn(`Warning: Failed to release lock file "${this.lockPath}": ${error.message}`);
+      }
+    }
+  }
+
+  /**
    * Load the ledger from disk
+   * FIX BUG-039: Use file locking to prevent race conditions
    */
   async load(): Promise<void> {
+    await this.acquireLock();
+
     try {
       await access(this.ledgerPath);
       const content = await readFile(this.ledgerPath, 'utf-8');
@@ -49,15 +129,24 @@ export class LedgerManager {
       }
       // If file doesn't exist, start with empty ledger
       this.ledger = { migrations: [], currentBatch: 0 };
+    } finally {
+      await this.releaseLock();
     }
   }
 
   /**
    * Save the ledger to disk
+   * FIX BUG-039: Use file locking to prevent race conditions
    */
   async save(): Promise<void> {
-    const content = JSON.stringify(this.ledger, null, 2);
-    await writeFile(this.ledgerPath, content, 'utf-8');
+    await this.acquireLock();
+
+    try {
+      const content = JSON.stringify(this.ledger, null, 2);
+      await writeFile(this.ledgerPath, content, 'utf-8');
+    } finally {
+      await this.releaseLock();
+    }
   }
 
   /**
@@ -205,5 +294,19 @@ export class LedgerManager {
    */
   isApplied(filename: string): boolean {
     return this.ledger.migrations.some((m) => m.filename === filename);
+  }
+
+  /**
+   * FIX BUG-039: Clean up any stale lock files
+   * This should be called on graceful shutdown or if the lock is stuck
+   */
+  async forceUnlock(): Promise<void> {
+    try {
+      await unlink(this.lockPath);
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') {
+        throw new Error(`Failed to remove lock file "${this.lockPath}": ${error.message}`);
+      }
+    }
   }
 }

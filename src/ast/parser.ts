@@ -108,10 +108,25 @@ export class Parser {
       typeArgs = this.parseTypeArgs();
     }
 
-    // Parse decorators
+    // FIX BUG-040: Parse decorators and detect duplicates
     const decorators: DecoratorNode[] = [];
+    const seenDecorators = new Set<string>();
+
     while (this.check('DECORATOR')) {
-      decorators.push(this.parseDecorator());
+      const decorator = this.parseDecorator();
+
+      // Check for duplicate decorators
+      if (seenDecorators.has(decorator.name)) {
+        throw new ParseError(
+          `Duplicate decorator @${decorator.name} on column "${name}". ` +
+          `Each decorator can only be used once per column.`,
+          this.previous().line,
+          this.previous().column
+        );
+      }
+
+      seenDecorators.add(decorator.name);
+      decorators.push(decorator);
     }
 
     return {

@@ -109,11 +109,18 @@ export function formatTable(
 
 /**
  * Truncate text with ellipsis
+ * FIX BUG-038: Handle edge case where maxLength < 3
  */
 export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) {
     return text;
   }
+
+  // If maxLength is too small for ellipsis, just truncate without it
+  if (maxLength <= 3) {
+    return text.slice(0, maxLength);
+  }
+
   return text.slice(0, maxLength - 3) + '...';
 }
 
