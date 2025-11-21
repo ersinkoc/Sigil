@@ -235,6 +235,7 @@ export default {
       generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
+      config, // FIX CRITICAL-1: Pass config for file size validation
     });
 
     const { applied, skipped } = await runner.up();
@@ -270,6 +271,7 @@ export default {
       generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
+      config, // FIX CRITICAL-1: Pass config for file size validation
     });
 
     const { rolledBack } = await runner.down();
@@ -298,6 +300,7 @@ export default {
       generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
+      config, // FIX CRITICAL-1: Pass config for file size validation
     });
 
     const { applied, pending, currentBatch } = await runner.status();
