@@ -138,6 +138,32 @@ export interface SqlGenerator {
 
 /**
  * Custom Error Types
+ * FIX LOW-2: Documented error handling hierarchy
+ *
+ * Error Hierarchy:
+ * - SigilError (base): General errors in Sigil operations
+ *   - IntegrityError: Migration integrity violations (hash mismatch, missing files, ledger corruption, lock failures)
+ *   - ParseError: Syntax errors in .sigl migration files
+ *   - GeneratorError: SQL generation failures
+ *
+ * Usage Guidelines:
+ * - Catch SigilError to handle all Sigil-specific errors
+ * - Catch specific subtypes (IntegrityError, ParseError) for targeted handling
+ * - All errors include descriptive messages with context
+ * - IntegrityError and ParseError may have additional properties (cause, line, column)
+ *
+ * Examples:
+ *   try {
+ *     await runner.up();
+ *   } catch (error) {
+ *     if (error instanceof IntegrityError) {
+ *       // Handle ledger/migration integrity issues
+ *     } else if (error instanceof ParseError) {
+ *       // Handle syntax errors in migration files
+ *     } else if (error instanceof SigilError) {
+ *       // Handle other Sigil errors
+ *     }
+ *   }
  */
 export class SigilError extends Error {
   constructor(message: string) {
