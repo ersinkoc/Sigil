@@ -125,6 +125,74 @@ export interface SigilConfig {
   lockTimeout?: number;
   /** Lock retry delay in milliseconds (default: 100ms) */
   lockRetryDelay?: number;
+
+  // FIX LOW-4: Performance metrics hooks
+  /** Optional performance metrics callback for monitoring and telemetry */
+  metrics?: {
+    /**
+     * Called when a migration completes (success or failure)
+     * @param event - Metric event data
+     */
+    onMigrationComplete?: (event: MigrationMetricEvent) => void | Promise<void>;
+    /**
+     * Called when a rollback completes (success or failure)
+     * @param event - Metric event data
+     */
+    onRollbackComplete?: (event: RollbackMetricEvent) => void | Promise<void>;
+    /**
+     * Called when lock acquisition succeeds
+     * @param event - Metric event data
+     */
+    onLockAcquired?: (event: LockMetricEvent) => void | Promise<void>;
+  };
+}
+
+/**
+ * FIX LOW-4: Metric event for migration operations
+ */
+export interface MigrationMetricEvent {
+  /** Migration filename */
+  filename: string;
+  /** Operation: 'up' or 'down' */
+  operation: 'up' | 'down';
+  /** Duration in milliseconds */
+  duration: number;
+  /** Number of SQL statements executed */
+  sqlStatements: number;
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+  /** Batch number */
+  batch: number;
+}
+
+/**
+ * FIX LOW-4: Metric event for rollback operations
+ */
+export interface RollbackMetricEvent {
+  /** Total migrations rolled back */
+  count: number;
+  /** Total duration in milliseconds */
+  duration: number;
+  /** Batch number that was rolled back */
+  batch: number;
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * FIX LOW-4: Metric event for lock operations
+ */
+export interface LockMetricEvent {
+  /** Lock file path */
+  lockPath: string;
+  /** Time taken to acquire lock in milliseconds */
+  duration: number;
+  /** Number of retry attempts */
+  retries: number;
 }
 
 /**

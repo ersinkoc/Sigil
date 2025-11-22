@@ -39,7 +39,27 @@ export interface LoggerConfig {
 }
 
 /**
- * Singleton Logger instance
+ * FIX LOW-3: Singleton Logger instance for structured logging
+ *
+ * Provides centralized logging with multiple output formats and log levels.
+ * Supports console output (colored) and JSON file output for log aggregation.
+ *
+ * @class Logger
+ * @example
+ * ```typescript
+ * // Initialize logger with config
+ * const logger = getLogger({
+ *   console: true,
+ *   file: '.sigil.log',
+ *   level: 'INFO',
+ *   auditTrail: true
+ * });
+ *
+ * // Log at different levels
+ * await logger.info('migration', 'Applying migration', { filename: '001_users.sigl' });
+ * await logger.error('database', 'Connection failed', { error: err.message });
+ * await logger.security('migration_applied', { filename: '001_users.sigl', duration: 1234 });
+ * ```
  */
 export class Logger {
   private static instance: Logger;
@@ -194,7 +214,36 @@ export class Logger {
 }
 
 /**
- * Export singleton instance getter
+ * FIX LOW-3: Get or initialize the singleton Logger instance
+ *
+ * Returns the singleton Logger instance. If config is provided on first call,
+ * initializes the logger with that configuration. Subsequent calls with config
+ * will update the existing logger's settings.
+ *
+ * @param {LoggerConfig} [config] - Optional logger configuration
+ * @param {boolean} [config.console=true] - Enable console output
+ * @param {string|null} [config.file=null] - Path to JSON log file (null to disable)
+ * @param {LogLevel} [config.level='INFO'] - Minimum log level to output
+ * @param {boolean} [config.auditTrail=true] - Enable security audit logging
+ *
+ * @returns {Logger} Singleton Logger instance
+ *
+ * @example
+ * ```typescript
+ * // First call - initialize with config
+ * const logger = getLogger({
+ *   console: true,
+ *   file: '.sigil.log',
+ *   level: 'DEBUG'
+ * });
+ *
+ * // Subsequent calls - get existing instance
+ * const sameLogger = getLogger();
+ *
+ * // Log messages
+ * await logger.info('category', 'Message', { key: 'value' });
+ * await logger.security('action', { details: 'data' });
+ * ```
  */
 export function getLogger(config?: LoggerConfig): Logger {
   return Logger.getInstance(config);

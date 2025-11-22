@@ -6,7 +6,7 @@
 
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
-import { DbAdapter, SigilError, SigilConfig } from '../ast/types.js';
+import { DbAdapter, SigilError, SigilConfig, MigrationMetricEvent } from '../ast/types.js';
 import { Parser } from '../ast/parser.js';
 import { SqlGenerator } from '../generators/base.js';
 import { LedgerManager } from './ledger.js';
@@ -27,12 +27,51 @@ export interface RunnerOptions {
   config?: SigilConfig; // FIX CRITICAL-1: Add config for file size validation
 }
 
+/**
+ * FIX LOW-3: Represents a loaded migration file
+ *
+ * @interface MigrationFile
+ * @property {string} filename - Name of the migration file (e.g., "001_create_users.sigl")
+ * @property {string} filepath - Full path to the migration file
+ * @property {string} content - Contents of the migration file
+ */
 export interface MigrationFile {
   filename: string;
   filepath: string;
   content: string;
 }
 
+/**
+ * FIX LOW-3: Migration Runner - Orchestrates migration execution
+ *
+ * The MigrationRunner is the main entry point for executing migrations.
+ * It handles loading, parsing, validating, and executing migrations with
+ * full transaction support and integrity checking.
+ *
+ * @class MigrationRunner
+ * @example
+ * ```typescript
+ * const runner = new MigrationRunner({
+ *   adapter: myDbAdapter,
+ *   generator: new PostgresGenerator(),
+ *   migrationsPath: './migrations',
+ *   config: {
+ *     logging: { file: '.sigil.log' },
+ *     lockTimeout: 60000
+ *   }
+ * });
+ *
+ * // Apply pending migrations
+ * const { applied, skipped } = await runner.up();
+ * console.log(`Applied: ${applied.length}, Skipped: ${skipped.length}`);
+ *
+ * // Rollback last batch
+ * const { rolledBack } = await runner.down();
+ *
+ * // Check status
+ * const { applied, pending, currentBatch } = await runner.status();
+ * ```
+ */
 export class MigrationRunner {
   private adapter: DbAdapter;
   private generator: SqlGenerator;
@@ -188,6 +227,19 @@ export class MigrationRunner {
           duration: migrationDuration,
           sqlStatements: sqlStatements.length,
         });
+
+        // FIX LOW-4: Emit performance metric
+        if (this.config?.metrics?.onMigrationComplete) {
+          const metricEvent: MigrationMetricEvent = {
+            filename: migration.filename,
+            operation: 'up',
+            duration: migrationDuration,
+            sqlStatements: sqlStatements.length,
+            success: true,
+            batch: this.ledger.getCurrentBatch() + 1,
+          };
+          await this.config.metrics.onMigrationComplete(metricEvent);
+        }
 
         // Collect migration for batch recording (don't record yet)
         migrationsToRecord.push({
@@ -401,7 +453,33 @@ export class MigrationRunner {
   }
 
   /**
-   * Get migration status
+   * FIX LOW-3: Get migration status
+   *
+   * Returns information about applied and pending migrations without
+   * executing any changes. Useful for checking migration state before
+   * running up() or down().
+   *
+   * @returns {Promise<{applied: string[], pending: string[], currentBatch: number}>}
+   *          Object containing migration status information
+   * @property {string[]} applied - List of filenames for applied migrations
+   * @property {string[]} pending - List of filenames for pending migrations
+   * @property {number} currentBatch - Current batch number (0 if no migrations applied)
+   *
+   * @throws {SigilError} If migrations directory doesn't exist
+   * @throws {IntegrityError} If migration integrity check fails
+   *
+   * @example
+   * ```typescript
+   * const status = await runner.status();
+   * console.log(`Applied: ${status.applied.length}`);
+   * console.log(`Pending: ${status.pending.length}`);
+   * console.log(`Current batch: ${status.currentBatch}`);
+   *
+   * if (status.pending.length > 0) {
+   *   console.log('Pending migrations:', status.pending);
+   *   await runner.up();
+   * }
+   * ```
    */
   async status(): Promise<{
     applied: string[];
