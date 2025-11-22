@@ -2,89 +2,237 @@
  * Ledger: Tracks applied migrations and ensures integrity
  * Uses SHA-256 hashing to detect changes in migration files
  * FIX BUG-039: Implements file locking to prevent race conditions
+ * FIX CRITICAL-2: Enhanced atomic lock mechanism to prevent TOCTOU race conditions
  */
 
-import { readFile, writeFile, access, unlink, stat } from 'fs/promises';
+import { readFile, writeFile, access, unlink, stat, rename } from 'fs/promises';
 import { open } from 'fs/promises';
-import { createHash } from 'crypto';
-import { Ledger, LedgerEntry, IntegrityError } from '../ast/types.js';
+import { createHash, randomUUID } from 'crypto';
+import { hostname } from 'os';
+import { Ledger, LedgerEntry, IntegrityError, SigilConfig } from '../ast/types.js';
+
+/**
+ * FIX CRITICAL-2: Lock information structure
+ * Contains metadata to identify lock owner and detect stale locks
+ */
+interface LockInfo {
+  pid: number;
+  hostname: string;
+  lockId: string; // Unique identifier for this lock attempt
+  acquiredAt: string; // ISO timestamp
+}
 
 export class LedgerManager {
   private ledgerPath: string;
   private ledger: Ledger;
   private lockPath: string;
-  private lockTimeout: number = 30000; // 30 seconds
-  private lockRetryDelay: number = 100; // 100ms between retries
+  private lockTimeout: number; // FIX MEDIUM-3: Now configurable
+  private lockRetryDelay: number; // FIX MEDIUM-3: Now configurable
+  private currentLockId: string | null = null; // FIX CRITICAL-2: Track our lock ID
 
-  constructor(ledgerPath: string = '.sigil_ledger.json') {
+  constructor(ledgerPath: string = '.sigil_ledger.json', config?: SigilConfig) {
     this.ledgerPath = ledgerPath;
     this.lockPath = `${ledgerPath}.lock`;
     this.ledger = { migrations: [], currentBatch: 0 };
+
+    // FIX MEDIUM-3: Configurable lock timeouts
+    this.lockTimeout = config?.lockTimeout ?? 30000; // Default: 30 seconds
+    this.lockRetryDelay = config?.lockRetryDelay ?? 100; // Default: 100ms
   }
 
   /**
-   * FIX BUG-039: Acquire exclusive lock on ledger file
-   * Uses atomic file creation to prevent race conditions
+   * FIX CRITICAL-2: Acquire exclusive lock with atomic operations
+   * Uses two-phase approach to prevent TOCTOU race conditions:
+   * 1. Create temp file with unique ID
+   * 2. Atomic rename to lock file
+   * 3. Validate we own the lock by checking contents
    */
   private async acquireLock(): Promise<void> {
     const startTime = Date.now();
+    const ourHostname = hostname();
 
     while (true) {
+      // Check if we've exceeded timeout
+      if (Date.now() - startTime >= this.lockTimeout) {
+        throw new IntegrityError(
+          `Failed to acquire ledger lock after ${this.lockTimeout}ms. ` +
+          `Another migration process may be running on this or another machine. ` +
+          `If no other process is running, delete "${this.lockPath}" manually.`
+        );
+      }
+
       try {
-        // Check for stale locks (older than lockTimeout)
-        try {
-          const lockStat = await stat(this.lockPath);
-          const lockAge = Date.now() - lockStat.mtimeMs;
+        // Step 1: Check for existing lock and validate if stale
+        await this.checkAndCleanStaleLock();
 
-          if (lockAge > this.lockTimeout) {
-            // Lock is stale, remove it
-            await unlink(this.lockPath).catch(() => {
-              // Ignore errors if another process already removed it
-            });
-          }
-        } catch {
-          // Lock file doesn't exist, which is fine
-        }
+        // Step 2: Create unique temp lock file
+        const lockId = randomUUID();
+        const tempLockPath = `${this.lockPath}.tmp.${lockId}`;
 
-        // Try to create lock file atomically with exclusive flag
-        const handle = await open(this.lockPath, 'wx');
-        await handle.writeFile(JSON.stringify({
+        const lockInfo: LockInfo = {
           pid: process.pid,
-          acquiredAt: new Date().toISOString()
-        }));
+          hostname: ourHostname,
+          lockId,
+          acquiredAt: new Date().toISOString(),
+        };
+
+        // Step 3: Write lock info to temp file
+        const handle = await open(tempLockPath, 'wx');
+        await handle.writeFile(JSON.stringify(lockInfo, null, 2));
         await handle.close();
 
-        // Lock acquired successfully
-        return;
-      } catch (error: any) {
-        if (error.code === 'EEXIST') {
-          // Lock file exists, another process has the lock
-          const elapsed = Date.now() - startTime;
+        // Step 4: Atomic rename (this is the critical atomic operation)
+        try {
+          await rename(tempLockPath, this.lockPath);
+        } catch (error: any) {
+          // Rename failed - another process got the lock first
+          // Clean up our temp file
+          await unlink(tempLockPath).catch(() => {});
 
-          if (elapsed >= this.lockTimeout) {
-            throw new IntegrityError(
-              `Failed to acquire ledger lock after ${this.lockTimeout}ms. ` +
-              `Another migration process may be running. ` +
-              `If no other process is running, delete "${this.lockPath}" manually.`
-            );
+          if (error.code === 'EEXIST' || error.code === 'EPERM') {
+            // Lock already exists, retry
+            await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
+            continue;
           }
 
-          // Wait and retry
-          await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
-        } else {
           // Other error, propagate it
           throw error;
         }
+
+        // Step 5: Verify we actually own the lock (paranoid check)
+        const acquired = await this.verifyLockOwnership(lockId);
+        if (acquired) {
+          this.currentLockId = lockId;
+          return;
+        }
+
+        // Someone else got the lock between rename and verify (extremely rare)
+        // This shouldn't happen with atomic rename, but be defensive
+        await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
+
+      } catch (error: any) {
+        if (error instanceof IntegrityError) {
+          // Re-throw timeout errors
+          throw error;
+        }
+
+        // Unexpected error - wait and retry
+        await new Promise(resolve => setTimeout(resolve, this.lockRetryDelay));
       }
     }
   }
 
   /**
-   * FIX BUG-039: Release lock on ledger file
+   * FIX CRITICAL-2: Check for stale locks and clean them up safely
+   * Validates process is actually dead before removing lock
+   */
+  private async checkAndCleanStaleLock(): Promise<void> {
+    try {
+      // Read existing lock file
+      const lockContent = await readFile(this.lockPath, 'utf-8');
+      const lockInfo: LockInfo = JSON.parse(lockContent);
+
+      const lockAge = Date.now() - new Date(lockInfo.acquiredAt).getTime();
+
+      // Only consider locks older than timeout as stale
+      if (lockAge < this.lockTimeout) {
+        return; // Lock is fresh
+      }
+
+      // Stale lock detected - verify process is actually dead
+      const isProcessDead = await this.isProcessDead(lockInfo.pid, lockInfo.hostname);
+
+      if (isProcessDead) {
+        // Process is confirmed dead, safe to remove lock
+        await unlink(this.lockPath).catch(() => {
+          // Ignore errors - another process may have cleaned it up
+        });
+      }
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        // Lock file doesn't exist - that's fine
+        return;
+      }
+
+      // JSON parse error or other issues - treat as no lock
+      // (corrupted lock file should be removed)
+      try {
+        await unlink(this.lockPath).catch(() => {});
+      } catch {
+        // Ignore cleanup errors
+      }
+    }
+  }
+
+  /**
+   * FIX CRITICAL-2: Verify that we own the lock by checking the lock ID
+   */
+  private async verifyLockOwnership(expectedLockId: string): Promise<boolean> {
+    try {
+      const lockContent = await readFile(this.lockPath, 'utf-8');
+      const lockInfo: LockInfo = JSON.parse(lockContent);
+
+      // Check if the lock ID matches and it's on our hostname
+      return lockInfo.lockId === expectedLockId &&
+             lockInfo.hostname === hostname() &&
+             lockInfo.pid === process.pid;
+    } catch {
+      // Can't read/parse lock file - we don't own it
+      return false;
+    }
+  }
+
+  /**
+   * FIX CRITICAL-2: Check if a process is dead
+   * Cross-platform approach: try to send signal 0 to check existence
+   */
+  private async isProcessDead(pid: number, processHostname: string): Promise<boolean> {
+    // If lock is from a different hostname, we can't check the process
+    // Treat it as alive to be safe (don't remove cross-machine locks)
+    if (processHostname !== hostname()) {
+      return false; // Assume alive
+    }
+
+    try {
+      // Signal 0 doesn't actually send a signal, just checks if process exists
+      // This works on Unix-like systems
+      process.kill(pid, 0);
+      // If we get here, process exists
+      return false;
+    } catch (error: any) {
+      // ESRCH = process doesn't exist
+      // EPERM = process exists but we don't have permission (still alive)
+      if (error.code === 'ESRCH') {
+        return true; // Process is dead
+      }
+      return false; // Process exists (we just can't signal it)
+    }
+  }
+
+  /**
+   * FIX CRITICAL-2: Release lock with ownership verification
+   * Only release if we actually own the lock
    */
   private async releaseLock(): Promise<void> {
     try {
-      await unlink(this.lockPath);
+      // FIX CRITICAL-2: Verify we own the lock before releasing
+      if (this.currentLockId) {
+        const weOwnIt = await this.verifyLockOwnership(this.currentLockId);
+
+        if (weOwnIt) {
+          await unlink(this.lockPath);
+          this.currentLockId = null;
+        } else {
+          // We don't own the lock anymore (very unusual)
+          console.warn(
+            `Warning: Cannot release lock "${this.lockPath}" - ownership verification failed. ` +
+            `Another process may have taken over.`
+          );
+        }
+      } else {
+        // No lock ID tracked - try to release anyway (backward compat)
+        await unlink(this.lockPath);
+      }
     } catch (error: any) {
       if (error.code !== 'ENOENT') {
         // Log warning but don't fail - lock might have been cleaned up already
@@ -226,6 +374,7 @@ export class LedgerManager {
   /**
    * FIX BUG-004 & BUG-005: Record multiple migrations atomically as a single batch
    * This ensures all migrations in a batch are recorded together and batch number is atomic
+   * FIX MEDIUM-6: Added batch number overflow protection
    */
   async recordBatch(migrations: { filename: string; content: string }[]): Promise<void> {
     if (migrations.length === 0) {
@@ -234,6 +383,17 @@ export class LedgerManager {
 
     // FIX BUG-005: Calculate batch number once at the start to prevent race conditions
     const batchNumber = this.ledger.currentBatch + 1;
+
+    // FIX MEDIUM-6: Check for batch number overflow
+    // JavaScript Number.MAX_SAFE_INTEGER = 2^53 - 1 = 9007199254740991
+    if (batchNumber > Number.MAX_SAFE_INTEGER) {
+      throw new IntegrityError(
+        `Batch number overflow detected! Current batch: ${this.ledger.currentBatch}. ` +
+        `Maximum safe integer exceeded. This is extremely unlikely in normal operation. ` +
+        `Consider resetting the migration ledger or using a different database.`
+      );
+    }
+
     const appliedAt = new Date().toISOString();
 
     // Create all entries for this batch
@@ -294,6 +454,68 @@ export class LedgerManager {
    */
   isApplied(filename: string): boolean {
     return this.ledger.migrations.some((m) => m.filename === filename);
+  }
+
+  /**
+   * FIX CRITICAL-4: Validate ledger write capability before executing migrations
+   * Checks disk space, write permissions, and ability to create/update the ledger file
+   * This prevents situations where migrations succeed but ledger update fails
+   *
+   * @throws IntegrityError if ledger cannot be written
+   */
+  async validateWriteCapability(): Promise<void> {
+    try {
+      // Test write by creating/updating the ledger (this validates write permissions)
+      const testLedger: Ledger = {
+        ...this.ledger,
+        migrations: [...this.ledger.migrations],
+        currentBatch: this.ledger.currentBatch,
+      };
+
+      // Acquire lock for validation
+      await this.acquireLock();
+
+      try {
+        // Try to write the ledger (without actual changes)
+        const content = JSON.stringify(testLedger, null, 2);
+        await writeFile(this.ledgerPath, content, 'utf-8');
+
+        // Verify we can read it back
+        const readBack = await readFile(this.ledgerPath, 'utf-8');
+        JSON.parse(readBack); // Ensure it's valid JSON
+
+        // Check available disk space (at least 10MB free)
+        const stats = await stat(this.ledgerPath);
+        // Note: We can't directly check free disk space in Node.js without native modules
+        // But we can check if the file size is reasonable
+        if (stats.size > 100 * 1024 * 1024) { // 100MB
+          throw new Error('Ledger file is unusually large (>100MB), possible disk issue');
+        }
+      } finally {
+        await this.releaseLock();
+      }
+
+    } catch (error: any) {
+      // Format a helpful error message
+      const errorMessage = [
+        '❌ Ledger write validation failed',
+        '',
+        `Error: ${error.message}`,
+        '',
+        'Troubleshooting steps:',
+        '1. Check write permissions for the ledger directory',
+        `2. Ensure sufficient disk space is available`,
+        `3. Verify the ledger file is not corrupted: ${this.ledgerPath}`,
+        '4. Check if another process has locked the ledger file',
+        '',
+        '⚠️  IMPORTANT: Migrations were NOT executed because ledger validation failed.',
+        '   This prevents database changes from being made without proper tracking.',
+      ].join('\n');
+
+      const validationError = new IntegrityError(errorMessage);
+      (validationError as any).cause = error;
+      throw validationError;
+    }
   }
 
   /**

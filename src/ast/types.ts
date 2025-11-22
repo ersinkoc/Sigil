@@ -91,12 +91,108 @@ export interface SchemaIntrospector {
 
 /**
  * Configuration
+ * FIX CRITICAL-1: Added file size validation options
+ * FIX MEDIUM-1: Added logging configuration
  */
 export interface SigilConfig {
   adapter: DbAdapter;
   generator?: SqlGenerator; // FIX BUG-045: Changed from any to SqlGenerator
   migrationsPath?: string;
   ledgerPath?: string;
+
+  // FIX CRITICAL-1: File size validation (DoS prevention)
+  /** Maximum size for a single migration file in bytes (default: 5MB) */
+  maxMigrationFileSize?: number;
+  /** Maximum total size for all migration files in bytes (default: 50MB) */
+  maxTotalMigrationsSize?: number;
+  /** Enable/disable file size validation (default: true) */
+  enableFileSizeValidation?: boolean;
+
+  // FIX MEDIUM-1: Logging configuration (Audit trail)
+  logging?: {
+    /** Enable console output (default: true) */
+    console?: boolean;
+    /** File path for JSON logs (default: null, disabled) */
+    file?: string | null;
+    /** Minimum log level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SECURITY' (default: 'INFO') */
+    level?: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR' | 'SECURITY';
+    /** Enable security audit logging (default: true) */
+    auditTrail?: boolean;
+  };
+
+  // FIX MEDIUM-3: Configurable lock timeout
+  /** Lock timeout in milliseconds (default: 30000ms / 30s) */
+  lockTimeout?: number;
+  /** Lock retry delay in milliseconds (default: 100ms) */
+  lockRetryDelay?: number;
+
+  // FIX LOW-4: Performance metrics hooks
+  /** Optional performance metrics callback for monitoring and telemetry */
+  metrics?: {
+    /**
+     * Called when a migration completes (success or failure)
+     * @param event - Metric event data
+     */
+    onMigrationComplete?: (event: MigrationMetricEvent) => void | Promise<void>;
+    /**
+     * Called when a rollback completes (success or failure)
+     * @param event - Metric event data
+     */
+    onRollbackComplete?: (event: RollbackMetricEvent) => void | Promise<void>;
+    /**
+     * Called when lock acquisition succeeds
+     * @param event - Metric event data
+     */
+    onLockAcquired?: (event: LockMetricEvent) => void | Promise<void>;
+  };
+}
+
+/**
+ * FIX LOW-4: Metric event for migration operations
+ */
+export interface MigrationMetricEvent {
+  /** Migration filename */
+  filename: string;
+  /** Operation: 'up' or 'down' */
+  operation: 'up' | 'down';
+  /** Duration in milliseconds */
+  duration: number;
+  /** Number of SQL statements executed */
+  sqlStatements: number;
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+  /** Batch number */
+  batch: number;
+}
+
+/**
+ * FIX LOW-4: Metric event for rollback operations
+ */
+export interface RollbackMetricEvent {
+  /** Total migrations rolled back */
+  count: number;
+  /** Total duration in milliseconds */
+  duration: number;
+  /** Batch number that was rolled back */
+  batch: number;
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * FIX LOW-4: Metric event for lock operations
+ */
+export interface LockMetricEvent {
+  /** Lock file path */
+  lockPath: string;
+  /** Time taken to acquire lock in milliseconds */
+  duration: number;
+  /** Number of retry attempts */
+  retries: number;
 }
 
 /**
@@ -110,6 +206,32 @@ export interface SqlGenerator {
 
 /**
  * Custom Error Types
+ * FIX LOW-2: Documented error handling hierarchy
+ *
+ * Error Hierarchy:
+ * - SigilError (base): General errors in Sigil operations
+ *   - IntegrityError: Migration integrity violations (hash mismatch, missing files, ledger corruption, lock failures)
+ *   - ParseError: Syntax errors in .sigl migration files
+ *   - GeneratorError: SQL generation failures
+ *
+ * Usage Guidelines:
+ * - Catch SigilError to handle all Sigil-specific errors
+ * - Catch specific subtypes (IntegrityError, ParseError) for targeted handling
+ * - All errors include descriptive messages with context
+ * - IntegrityError and ParseError may have additional properties (cause, line, column)
+ *
+ * Examples:
+ *   try {
+ *     await runner.up();
+ *   } catch (error) {
+ *     if (error instanceof IntegrityError) {
+ *       // Handle ledger/migration integrity issues
+ *     } else if (error instanceof ParseError) {
+ *       // Handle syntax errors in migration files
+ *     } else if (error instanceof SigilError) {
+ *       // Handle other Sigil errors
+ *     }
+ *   }
  */
 export class SigilError extends Error {
   constructor(message: string) {

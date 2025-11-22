@@ -1,9 +1,24 @@
 /**
  * SQL Identifier Escaping Utilities
  * Provides safe escaping for SQL identifiers to prevent SQL injection
+ * FIX LOW-1: Extracted magic numbers to named constants
  */
 
 import { SigilError } from '../ast/types.js';
+
+/**
+ * FIX LOW-1: Database-specific identifier length limits
+ * PostgreSQL: 63 characters (NAMEDATALEN - 1)
+ * MySQL: 64 characters
+ * SQLite: 256 characters
+ * Oracle: 30 characters (128 in 12.2+)
+ *
+ * Using PostgreSQL's limit as default for maximum compatibility
+ */
+export const MAX_IDENTIFIER_LENGTH_POSTGRES = 63;
+export const MAX_IDENTIFIER_LENGTH_MYSQL = 64;
+export const MAX_IDENTIFIER_LENGTH_SQLITE = 256;
+export const MAX_IDENTIFIER_LENGTH_DEFAULT = MAX_IDENTIFIER_LENGTH_POSTGRES;
 
 /**
  * Validates and escapes a SQL identifier (schema, table, column name)
@@ -11,10 +26,15 @@ import { SigilError } from '../ast/types.js';
  *
  * @param identifier - The identifier to validate and escape
  * @param type - Type of identifier for error messages
+ * @param maxLength - Maximum allowed length (default: PostgreSQL limit of 63)
  * @returns Safely escaped identifier
  * @throws SigilError if identifier contains dangerous characters
  */
-export function escapeSqlIdentifier(identifier: string, type: string = 'identifier'): string {
+export function escapeSqlIdentifier(
+  identifier: string,
+  type: string = 'identifier',
+  maxLength: number = MAX_IDENTIFIER_LENGTH_DEFAULT
+): string {
   if (!identifier || typeof identifier !== 'string') {
     throw new SigilError(`Invalid ${type}: must be a non-empty string`);
   }
@@ -38,14 +58,9 @@ export function escapeSqlIdentifier(identifier: string, type: string = 'identifi
     );
   }
 
-  // Check for SQL keywords that could be injection attempts
-  const sqlKeywords = /\b(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|EXEC|EXECUTE|UNION|SELECT|WHERE|FROM)\b/i;
-  if (sqlKeywords.test(identifier)) {
-    throw new SigilError(
-      `Invalid ${type}: "${identifier}" contains SQL keywords. ` +
-      `This may be an SQL injection attempt.`
-    );
-  }
+  // NOTE: SQL keyword detection removed as security control (CRITICAL-3 fix)
+  // Escaping provides sufficient protection against SQL injection
+  // Users can use SQL keywords as identifiers - they will be properly escaped
 
   // Validate format: must start with letter or underscore
   if (!/^[a-zA-Z_]/.test(identifier)) {
@@ -63,10 +78,10 @@ export function escapeSqlIdentifier(identifier: string, type: string = 'identifi
     );
   }
 
-  // Check length (prevent extremely long identifiers)
-  if (identifier.length > 63) {
+  // FIX LOW-1: Check length using configurable max (prevent extremely long identifiers)
+  if (identifier.length > maxLength) {
     throw new SigilError(
-      `Invalid ${type}: "${identifier}" is too long. Maximum length is 63 characters.`
+      `Invalid ${type}: "${identifier}" is too long. Maximum length is ${maxLength} characters.`
     );
   }
 

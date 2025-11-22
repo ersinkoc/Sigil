@@ -1,43 +1,102 @@
 /**
  * Runner: Orchestrates migration execution
  * Manages the flow of parsing, generating SQL, and executing migrations
+ * FIX MEDIUM-1: Added structured logging for audit trail
  */
 
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
-import { DbAdapter, SigilError } from '../ast/types.js';
+import { DbAdapter, SigilError, SigilConfig, MigrationMetricEvent } from '../ast/types.js';
 import { Parser } from '../ast/parser.js';
 import { SqlGenerator } from '../generators/base.js';
 import { LedgerManager } from './ledger.js';
+import {
+  validateFileSize,
+  validateTotalSize,
+  DEFAULT_MAX_MIGRATION_FILE_SIZE,
+  DEFAULT_MAX_TOTAL_MIGRATIONS_SIZE,
+} from '../utils/file-validator.js';
+import { validateConnection } from '../utils/connection-validator.js';
+import { getLogger } from '../utils/logger.js';
 
 export interface RunnerOptions {
   adapter: DbAdapter;
   generator: SqlGenerator;
   migrationsPath: string;
   ledgerPath?: string;
+  config?: SigilConfig; // FIX CRITICAL-1: Add config for file size validation
 }
 
+/**
+ * FIX LOW-3: Represents a loaded migration file
+ *
+ * @interface MigrationFile
+ * @property {string} filename - Name of the migration file (e.g., "001_create_users.sigl")
+ * @property {string} filepath - Full path to the migration file
+ * @property {string} content - Contents of the migration file
+ */
 export interface MigrationFile {
   filename: string;
   filepath: string;
   content: string;
 }
 
+/**
+ * FIX LOW-3: Migration Runner - Orchestrates migration execution
+ *
+ * The MigrationRunner is the main entry point for executing migrations.
+ * It handles loading, parsing, validating, and executing migrations with
+ * full transaction support and integrity checking.
+ *
+ * @class MigrationRunner
+ * @example
+ * ```typescript
+ * const runner = new MigrationRunner({
+ *   adapter: myDbAdapter,
+ *   generator: new PostgresGenerator(),
+ *   migrationsPath: './migrations',
+ *   config: {
+ *     logging: { file: '.sigil.log' },
+ *     lockTimeout: 60000
+ *   }
+ * });
+ *
+ * // Apply pending migrations
+ * const { applied, skipped } = await runner.up();
+ * console.log(`Applied: ${applied.length}, Skipped: ${skipped.length}`);
+ *
+ * // Rollback last batch
+ * const { rolledBack } = await runner.down();
+ *
+ * // Check status
+ * const { applied, pending, currentBatch } = await runner.status();
+ * ```
+ */
 export class MigrationRunner {
   private adapter: DbAdapter;
   private generator: SqlGenerator;
   private migrationsPath: string;
   private ledger: LedgerManager;
+  private config?: SigilConfig; // FIX CRITICAL-1: Store config
 
   constructor(options: RunnerOptions) {
     this.adapter = options.adapter;
     this.generator = options.generator;
     this.migrationsPath = options.migrationsPath;
-    this.ledger = new LedgerManager(options.ledgerPath);
+    this.config = options.config; // FIX CRITICAL-1: Store config
+
+    // FIX MEDIUM-3: Pass config to ledger for configurable lock timeout
+    this.ledger = new LedgerManager(options.ledgerPath, this.config);
+
+    // FIX MEDIUM-1: Initialize logger with config
+    if (this.config?.logging) {
+      getLogger(this.config.logging);
+    }
   }
 
   /**
    * Load all migration files from the migrations directory
+   * FIX CRITICAL-1: Added file size validation to prevent DoS attacks
    */
   async loadMigrationFiles(): Promise<MigrationFile[]> {
     try {
@@ -46,10 +105,28 @@ export class MigrationRunner {
         .filter((f) => f.endsWith('.sigl'))
         .sort(); // Sort to ensure chronological order
 
+      // FIX CRITICAL-1: Check if file size validation is enabled
+      const enableValidation = this.config?.enableFileSizeValidation ?? true;
+      const maxFileSize = this.config?.maxMigrationFileSize ?? DEFAULT_MAX_MIGRATION_FILE_SIZE;
+      const maxTotalSize = this.config?.maxTotalMigrationsSize ?? DEFAULT_MAX_TOTAL_MIGRATIONS_SIZE;
+
+      const filepaths = siglFiles.map(f => join(this.migrationsPath, f));
+
+      // FIX CRITICAL-1: Validate total size of all migrations
+      if (enableValidation) {
+        await validateTotalSize(filepaths, maxTotalSize);
+      }
+
       const migrations: MigrationFile[] = [];
 
       for (const filename of siglFiles) {
         const filepath = join(this.migrationsPath, filename);
+
+        // FIX CRITICAL-1: Validate individual file size before reading
+        if (enableValidation) {
+          await validateFileSize(filepath, maxFileSize);
+        }
+
         const content = await readFile(filepath, 'utf-8');
         migrations.push({ filename, filepath, content });
       }
@@ -67,8 +144,13 @@ export class MigrationRunner {
 
   /**
    * Run pending migrations (UP)
+   * FIX CRITICAL-4: Added ledger write validation to prevent inconsistent state
+   * FIX MEDIUM-1: Added audit logging
    */
   async up(): Promise<{ applied: string[]; skipped: string[] }> {
+    const logger = getLogger();
+    const startTime = Date.now();
+
     await this.ledger.load();
     const migrations = await this.loadMigrationFiles();
 
@@ -86,8 +168,20 @@ export class MigrationRunner {
     );
 
     if (pendingFiles.length === 0) {
+      await logger.info('migration', 'No pending migrations');
       return { applied: [], skipped: [] };
     }
+
+    // FIX MEDIUM-1: Log migration start
+    await logger.security('migration_start', {
+      pendingCount: pendingFiles.length,
+      migrations: pendingFiles,
+      migrationsPath: this.migrationsPath,
+    });
+
+    // FIX CRITICAL-4: Validate ledger write capability BEFORE executing migrations
+    // This prevents the scenario where migrations succeed but ledger update fails
+    await this.ledger.validateWriteCapability();
 
     const applied: string[] = [];
     // FIX BUG-004: Collect all migrations to record, only save to ledger after all succeed
@@ -95,8 +189,12 @@ export class MigrationRunner {
 
     // FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
     try {
-      // Connect to database
-      await this.adapter.connect();
+      // FIX CRITICAL-6: Validate connection with retry logic and health check
+      await validateConnection(this.adapter, {
+        maxRetries: 3,
+        baseDelay: 1000
+      });
+
       for (const filename of pendingFiles) {
         const migration = migrations.find((m) => m.filename === filename);
 
@@ -109,6 +207,10 @@ export class MigrationRunner {
           );
         }
 
+        // FIX MEDIUM-1: Log migration application start
+        const migrationStartTime = Date.now();
+        await logger.info('migration', `Applying: ${migration.filename}`);
+
         // Parse the migration file
         const ast = Parser.parse(migration.content);
 
@@ -117,6 +219,27 @@ export class MigrationRunner {
 
         // Execute in transaction
         await this.adapter.transaction(sqlStatements);
+
+        // FIX MEDIUM-1: Log successful application
+        const migrationDuration = Date.now() - migrationStartTime;
+        await logger.security('migration_applied', {
+          filename: migration.filename,
+          duration: migrationDuration,
+          sqlStatements: sqlStatements.length,
+        });
+
+        // FIX LOW-4: Emit performance metric
+        if (this.config?.metrics?.onMigrationComplete) {
+          const metricEvent: MigrationMetricEvent = {
+            filename: migration.filename,
+            operation: 'up',
+            duration: migrationDuration,
+            sqlStatements: sqlStatements.length,
+            success: true,
+            batch: this.ledger.getCurrentBatch() + 1,
+          };
+          await this.config.metrics.onMigrationComplete(metricEvent);
+        }
 
         // Collect migration for batch recording (don't record yet)
         migrationsToRecord.push({
@@ -127,10 +250,64 @@ export class MigrationRunner {
         applied.push(filename);
       }
 
-      // FIX BUG-004: Record all migrations in the batch atomically after all succeeded
+      // FIX BUG-004 & CRITICAL-4: Record all migrations in the batch atomically after all succeeded
       if (migrationsToRecord.length > 0) {
-        await this.ledger.recordBatch(migrationsToRecord);
+        try {
+          await this.ledger.recordBatch(migrationsToRecord);
+        } catch (ledgerError) {
+          // FIX MEDIUM-1: Log ledger failure
+          await logger.error('ledger', 'Failed to record migrations in ledger', {
+            error: (ledgerError as Error).message,
+            appliedMigrations: migrationsToRecord.map(m => m.filename),
+          });
+
+          // FIX CRITICAL-4: Enhanced error message for ledger write failures
+          const errorMessage = [
+            '',
+            '🚨 CRITICAL: Migrations executed successfully but failed to update ledger!',
+            '',
+            `Error: ${(ledgerError as Error).message}`,
+            '',
+            '⚠️  DATABASE STATE:',
+            `   - ${migrationsToRecord.length} migration(s) were applied to the database`,
+            `   - Ledger file was NOT updated`,
+            '   - This creates an inconsistent state',
+            '',
+            '📋 APPLIED MIGRATIONS (not recorded):',
+            ...migrationsToRecord.map(m => `   - ${m.filename}`),
+            '',
+            '🔧 RECOVERY STEPS:',
+            '1. DO NOT run migrations again - they are already applied to the database',
+            '2. Manually update the ledger file or use a recovery tool',
+            '3. Verify database schema matches the applied migrations',
+            '4. Fix the ledger write issue (permissions, disk space, etc.)',
+            '',
+            'For assistance, check the documentation on ledger recovery.',
+          ].join('\n');
+
+          const enhancedError = new SigilError(errorMessage);
+          (enhancedError as any).cause = ledgerError;
+          (enhancedError as any).appliedMigrations = migrationsToRecord.map(m => m.filename);
+          throw enhancedError;
+        }
       }
+
+      // FIX MEDIUM-1: Log migration completion
+      const totalDuration = Date.now() - startTime;
+      await logger.security('migration_complete', {
+        appliedCount: applied.length,
+        totalDuration,
+        batch: this.ledger.getCurrentBatch(),
+      });
+
+    } catch (error) {
+      // FIX MEDIUM-1: Log migration failure
+      await logger.error('migration', 'Migration failed', {
+        error: (error as Error).message,
+        stack: (error as Error).stack,
+        appliedSoFar: applied,
+      });
+      throw error;
     } finally {
       await this.adapter.disconnect();
     }
@@ -143,8 +320,13 @@ export class MigrationRunner {
 
   /**
    * Rollback last batch of migrations (DOWN)
+   * FIX CRITICAL-4: Added ledger write validation to prevent inconsistent state
+   * FIX MEDIUM-1: Added audit logging
    */
   async down(): Promise<{ rolledBack: string[] }> {
+    const logger = getLogger();
+    const startTime = Date.now();
+
     await this.ledger.load();
     const migrations = await this.loadMigrationFiles();
 
@@ -152,15 +334,30 @@ export class MigrationRunner {
     const lastBatch = this.ledger.getLastBatchMigrations();
 
     if (lastBatch.length === 0) {
+      await logger.info('migration', 'No migrations to rollback');
       return { rolledBack: [] };
     }
+
+    // FIX MEDIUM-1: Log rollback start
+    await logger.security('rollback_start', {
+      batchNumber: this.ledger.getCurrentBatch(),
+      migrationCount: lastBatch.length,
+      migrations: lastBatch.map(m => m.filename),
+    });
+
+    // FIX CRITICAL-4: Validate ledger write capability BEFORE executing rollbacks
+    await this.ledger.validateWriteCapability();
 
     const rolledBack: string[] = [];
 
     // FIX BUG-042: Move connect() inside try block to ensure disconnect() is called on failure
     try {
-      // Connect to database
-      await this.adapter.connect();
+      // FIX CRITICAL-6: Validate connection with retry logic
+      await validateConnection(this.adapter, {
+        maxRetries: 3,
+        baseDelay: 1000
+      });
+
       for (const entry of lastBatch) {
         const migration = migrations.find((m) => m.filename === entry.filename);
         if (!migration) {
@@ -168,6 +365,10 @@ export class MigrationRunner {
             `Cannot rollback: migration file "${entry.filename}" not found`
           );
         }
+
+        // FIX MEDIUM-1: Log rollback operation
+        const rollbackStartTime = Date.now();
+        await logger.info('migration', `Rolling back: ${migration.filename}`);
 
         // Parse the migration file
         const ast = Parser.parse(migration.content);
@@ -178,11 +379,72 @@ export class MigrationRunner {
         // Execute in transaction
         await this.adapter.transaction(sqlStatements);
 
+        // FIX MEDIUM-1: Log successful rollback
+        const rollbackDuration = Date.now() - rollbackStartTime;
+        await logger.security('migration_rolled_back', {
+          filename: migration.filename,
+          duration: rollbackDuration,
+          sqlStatements: sqlStatements.length,
+        });
+
         rolledBack.push(entry.filename);
       }
 
-      // Update ledger
-      await this.ledger.rollbackLastBatch();
+      // FIX CRITICAL-4: Update ledger with enhanced error handling
+      try {
+        await this.ledger.rollbackLastBatch();
+      } catch (ledgerError) {
+        // FIX MEDIUM-1: Log ledger failure
+        await logger.error('ledger', 'Failed to update ledger after rollback', {
+          error: (ledgerError as Error).message,
+          rolledBackMigrations: rolledBack,
+        });
+
+        // FIX CRITICAL-4: Enhanced error message for ledger write failures during rollback
+        const errorMessage = [
+          '',
+          '🚨 CRITICAL: Rollbacks executed successfully but failed to update ledger!',
+          '',
+          `Error: ${(ledgerError as Error).message}`,
+          '',
+          '⚠️  DATABASE STATE:',
+          `   - ${rolledBack.length} migration(s) were rolled back in the database`,
+          `   - Ledger file was NOT updated`,
+          '   - This creates an inconsistent state',
+          '',
+          '📋 ROLLED BACK MIGRATIONS (not removed from ledger):',
+          ...rolledBack.map(m => `   - ${m}`),
+          '',
+          '🔧 RECOVERY STEPS:',
+          '1. DO NOT run rollback again - migrations are already rolled back',
+          '2. Manually update the ledger file to remove these migrations',
+          '3. Verify database schema matches the current state',
+          '4. Fix the ledger write issue (permissions, disk space, etc.)',
+          '',
+          'For assistance, check the documentation on ledger recovery.',
+        ].join('\n');
+
+        const enhancedError = new SigilError(errorMessage);
+        (enhancedError as any).cause = ledgerError;
+        (enhancedError as any).rolledBackMigrations = rolledBack;
+        throw enhancedError;
+      }
+
+      // FIX MEDIUM-1: Log rollback completion
+      const totalDuration = Date.now() - startTime;
+      await logger.security('rollback_complete', {
+        rolledBackCount: rolledBack.length,
+        totalDuration,
+      });
+
+    } catch (error) {
+      // FIX MEDIUM-1: Log rollback failure
+      await logger.error('migration', 'Rollback failed', {
+        error: (error as Error).message,
+        stack: (error as Error).stack,
+        rolledBackSoFar: rolledBack,
+      });
+      throw error;
     } finally {
       await this.adapter.disconnect();
     }
@@ -191,7 +453,33 @@ export class MigrationRunner {
   }
 
   /**
-   * Get migration status
+   * FIX LOW-3: Get migration status
+   *
+   * Returns information about applied and pending migrations without
+   * executing any changes. Useful for checking migration state before
+   * running up() or down().
+   *
+   * @returns {Promise<{applied: string[], pending: string[], currentBatch: number}>}
+   *          Object containing migration status information
+   * @property {string[]} applied - List of filenames for applied migrations
+   * @property {string[]} pending - List of filenames for pending migrations
+   * @property {number} currentBatch - Current batch number (0 if no migrations applied)
+   *
+   * @throws {SigilError} If migrations directory doesn't exist
+   * @throws {IntegrityError} If migration integrity check fails
+   *
+   * @example
+   * ```typescript
+   * const status = await runner.status();
+   * console.log(`Applied: ${status.applied.length}`);
+   * console.log(`Pending: ${status.pending.length}`);
+   * console.log(`Current batch: ${status.currentBatch}`);
+   *
+   * if (status.pending.length > 0) {
+   *   console.log('Pending migrations:', status.pending);
+   *   await runner.up();
+   * }
+   * ```
    */
   async status(): Promise<{
     applied: string[];

@@ -23,6 +23,7 @@ import {
   createMigrationTemplate,
   pluralize,
 } from './utils/formatting.js';
+import { validateMigrationPath } from './utils/path-validator.js';
 
 class SigilCLI {
   private command: string;
@@ -183,6 +184,7 @@ export default {
 
   /**
    * Create a new migration file
+   * FIX CRITICAL-5: Enhanced path traversal validation with canonicalization
    */
   private async create(): Promise<void> {
     const name = this.commandArgs[0];
@@ -191,19 +193,21 @@ export default {
       throw new SigilError('Migration name is required. Usage: sigil create <name>');
     }
 
-    // FIX BUG-010: Validate migration name to prevent path traversal attacks
-    if (name.includes('/') || name.includes('\\') || name.includes('..')) {
-      throw new SigilError(
-        'Invalid migration name. Migration names cannot contain path separators or ".."'
-      );
-    }
-
     const config = await this.loadConfig();
     const migrationsPath = resolve(process.cwd(), config.migrationsPath || './migrations');
 
     // Ensure migrations directory exists
     await mkdir(migrationsPath, { recursive: true });
 
+    // FIX CRITICAL-5: Comprehensive path validation
+    // - Prevents basic path traversal (../)
+    // - Prevents URL-encoded bypasses (%2F, %252F)
+    // - Prevents Unicode bypasses (／, ＼)
+    // - Uses canonicalization to verify final path
+    // - Detects symlink attacks
+    validateMigrationPath(name, migrationsPath); // Validates name is safe
+
+    // Generate timestamped filename (after validation)
     const filename = generateMigrationFilename(name);
     const filepath = join(migrationsPath, filename);
 
@@ -228,6 +232,7 @@ export default {
       generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
+      config, // FIX CRITICAL-1: Pass config for file size validation
     });
 
     const { applied, skipped } = await runner.up();
@@ -263,6 +268,7 @@ export default {
       generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
+      config, // FIX CRITICAL-1: Pass config for file size validation
     });
 
     const { rolledBack } = await runner.down();
@@ -291,6 +297,7 @@ export default {
       generator: this.getGenerator(config),
       migrationsPath: resolve(process.cwd(), config.migrationsPath || './migrations'),
       ledgerPath: config.ledgerPath,
+      config, // FIX CRITICAL-1: Pass config for file size validation
     });
 
     const { applied, pending, currentBatch } = await runner.status();
